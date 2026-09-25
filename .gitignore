@@ -1,0 +1,9 @@
+.godot/
+*.tmp
+.DS_Store
+# The addon is the product here; overrides the global ignore of addons/.
+!addons/
+# Test plugin installed only by the editor smoke tests.
+/addons/fake_a/
+# Project lock written by the dock smoke test.
+/loadout.lock.json
