@@ -28,3 +28,25 @@ func temp_dir(name: String) -> String:
 func write_text(path: String, text: String) -> void:
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	file.store_string(text)
+
+
+## Zips every file under src_dir into zip_path, each stored as prefix + relative path.
+func make_zip(src_dir: String, zip_path: String, prefix: String) -> void:
+	var packer := ZIPPacker.new()
+	packer.open(zip_path)
+	for relative in Fs.list_files(src_dir):
+		packer.start_file(prefix + relative)
+		packer.write_file(FileAccess.get_file_as_bytes(src_dir.path_join(relative)))
+		packer.close_file()
+	packer.close()
+
+
+## Adds one file with raw content to a new zip (for malformed archives).
+func make_raw_zip(zip_path: String, files: Dictionary) -> void:
+	var packer := ZIPPacker.new()
+	packer.open(zip_path)
+	for name: String in files:
+		packer.start_file(name)
+		packer.write_file(str(files[name]).to_utf8_buffer())
+		packer.close_file()
+	packer.close()
