@@ -44,11 +44,17 @@ class PluginState:
 	var source_label: String = ""
 	## Why the plugin is in this state, for the dock.
 	var message: String = ""
+	## Source could not be checked, cached data used (shown in the dock, never blocks).
+	var warning: String = ""
+	## Release notes and page of target_version (remote sources only).
+	var release_notes: String = ""
+	var release_url: String = ""
 
 
 var registry: LoadoutRegistry
 var lockfile: LoadoutLockfile
 var installer: LoadoutInstaller
+var checker: LoadoutUpdateChecker
 var registry_path: String
 var lock_path: String
 ## Problems loading the registry or the lock, shown in the dock.
@@ -62,31 +68,54 @@ var busy := false
 var _source_factory: Callable
 var _registry_ok := false
 var _lock_ok := false
+## Source of every registry entry from the last refresh (holds the releases install() needs).
+var _sources: Dictionary[String, LoadoutSource] = {}
 
 
-## source_factory: func(entry: LoadoutRegistry.Entry) -> LoadoutSource, defaults to LoadoutSource.create().
+## source_factory: func(entry: LoadoutRegistry.Entry) -> LoadoutSource, defaults to LoadoutSource.create()
+## without network. update_checker defaults to an in-memory one.
 func _init(plugin_installer: LoadoutInstaller, registry_file: String, lock_file: String,
-		source_factory: Callable = Callable()) -> void:
+		source_factory: Callable = Callable(), update_checker: LoadoutUpdateChecker = null) -> void:
 	installer = plugin_installer
 	registry_path = registry_file
 	lock_path = lock_file
 	_source_factory = source_factory
 	if not _source_factory.is_valid():
-		_source_factory = func(entry: LoadoutRegistry.Entry) -> LoadoutSource: return LoadoutSource.create(entry.source)
+		_source_factory = func(entry: LoadoutRegistry.Entry) -> LoadoutSource: return LoadoutSource.create(entry)
+	checker = update_checker if update_checker != null else LoadoutUpdateChecker.new("")
+	checker.load_cache()
 
 
-## Reloads registry and lock from disk and recomputes all states.
-func refresh() -> void:
+## Reloads registry and lock from disk and recomputes all states. Remote sources are asked at
+## most once a day; check_updates forces asking them now.
+func refresh(check_updates: bool = false) -> void:
 	_load_files()
 	var new_states: Array[PluginState] = []
+	_sources.clear()
 	if _registry_ok and _lock_ok:
 		for entry in registry.entries:
-			new_states.append(await _compute_state(entry))
+			new_states.append(await _compute_state(entry, check_updates))
 		for id in lockfile.plugins:
 			if registry.get_entry(id) == null:
 				new_states.append(_orphan_state(id))
+	checker.save_cache()
+	warnings.append_array(checker.warnings)
 	states = new_states
 	states_changed.emit()
+
+
+## Ids of plugins with a newer version in range (not pinned, not modified).
+func update_ids() -> PackedStringArray:
+	var ids: PackedStringArray = []
+	for state in states:
+		if state.status == Status.UPDATE:
+			ids.append(state.id)
+	return ids
+
+
+## Source of the plugin from the last refresh (null before the first refresh).
+func get_source(id: String) -> LoadoutSource:
+	return _sources.get(id)
 
 
 func get_state(id: String) -> PluginState:
@@ -119,6 +148,20 @@ func install_missing() -> Dictionary:
 	return summary
 
 
+## Updates every plugin from update_ids() (the dock asks for confirmation first).
+## Returns { "installed": PackedStringArray, "failed": { id: error }, "restart_recommended": bool }.
+func install_updates() -> Dictionary:
+	var summary := { "installed": PackedStringArray(), "failed": {}, "restart_recommended": false }
+	for id in update_ids():
+		var result := await install(id)
+		if result["ok"]:
+			summary["installed"].append(id)
+			summary["restart_recommended"] = summary["restart_recommended"] or result["restart_recommended"]
+		else:
+			summary["failed"][id] = result["error"]
+	return summary
+
+
 ## Installs or updates the plugin to its target version. Without force a modified, pinned or
 ## unmanaged folder is left alone and the result has "needs_confirmation" set.
 func install(id: String, force: bool = false) -> Dictionary:
@@ -128,7 +171,7 @@ func install(id: String, force: bool = false) -> Dictionary:
 		return _error_result(id, refusal)
 	if state.target_version == "":
 		return _error_result(id, state.message if state.message != "" else "No version to install is known.")
-	var source: LoadoutSource = _source_factory.call(state.entry)
+	var source: LoadoutSource = _sources.get(id)
 	if source == null:
 		return _error_result(id, "Source type %s is not supported." % state.entry.source.get("type"))
 	busy = true
@@ -235,23 +278,31 @@ func _load_files() -> void:
 	warnings.append_array(lockfile.warnings)
 
 
-func _compute_state(entry: LoadoutRegistry.Entry) -> PluginState:
+func _compute_state(entry: LoadoutRegistry.Entry, check_updates: bool = false) -> PluginState:
 	var state := PluginState.new()
 	state.id = entry.id
 	state.entry = entry
 	state.lock_entry = lockfile.get_entry(entry.id)
 	state.installed_version = installer.installed_version(entry)
-	var source: LoadoutSource = _source_factory.call(entry)
+	var source: LoadoutSource = _sources.get(entry.id)
+	if source == null:
+		source = _source_factory.call(entry)
 	var source_error := ""
 	if source == null:
 		source_error = "Source type %s is not supported." % entry.source.get("type")
 	else:
+		_sources[entry.id] = source
 		state.source_label = source.describe()
-		var latest: Dictionary = await source.get_latest_version(entry.version_range)
-		if latest["ok"]:
-			state.latest_version = latest["version"]
+		var loaded: Dictionary = await checker.load_releases(source, check_updates)
+		state.warning = loaded["warning"]
+		if not loaded["ok"]:
+			source_error = loaded["error"]
 		else:
-			source_error = latest["error"]
+			var latest: Dictionary = await source.get_latest_version(entry.version_range)
+			if latest["ok"]:
+				state.latest_version = latest["version"]
+			else:
+				source_error = latest["error"]
 	state.display_name = _installed_name(entry)
 	if state.display_name == "" and source != null:
 		state.display_name = source.get_plugin_name()
@@ -268,6 +319,7 @@ func _compute_state(entry: LoadoutRegistry.Entry) -> PluginState:
 			state.message = "The lock wants version %s, the source offers %s." % [state.lock_entry.version, state.latest_version]
 		if source_error != "":
 			state.message = source_error
+		_add_release_info(state, source)
 		return state
 
 	match installer.check_overwrite(entry, state.lock_entry):
@@ -291,7 +343,16 @@ func _compute_state(entry: LoadoutRegistry.Entry) -> PluginState:
 	# Overwriting (after confirmation) or updating goes to the newest version in range.
 	if state.status in [Status.UPDATE, Status.MODIFIED, Status.PINNED, Status.UNMANAGED]:
 		state.target_version = state.latest_version
+	_add_release_info(state, source)
 	return state
+
+
+func _add_release_info(state: PluginState, source: LoadoutSource) -> void:
+	if source == null or state.target_version == "":
+		return
+	var release := source.get_release(state.target_version)
+	state.release_notes = str(release.get("notes", ""))
+	state.release_url = str(release.get("url", ""))
 
 
 func _orphan_state(id: String) -> PluginState:
@@ -336,6 +397,7 @@ func _save_and_update(id: String) -> Error:
 	if state != null and state.entry != null:
 		var index := states.find(state)
 		states[index] = await _compute_state(state.entry)
+		checker.save_cache()
 	elif state != null:
 		states.erase(state)
 	states_changed.emit()

@@ -32,7 +32,7 @@ func _create_manager() -> void:
 	# Only captures the dictionary, not self (no reference cycle suite <-> manager).
 	var overrides := fake_sources
 	var factory := func(entry: LoadoutRegistry.Entry) -> LoadoutSource:
-		return overrides[entry.id] if overrides.has(entry.id) else LoadoutSource.create(entry.source)
+		return overrides[entry.id] if overrides.has(entry.id) else LoadoutSource.create(entry)
 	manager = Manager.new(installer, _registry_path(), _lock_path(), factory)
 
 
@@ -277,3 +277,98 @@ func test_actions_refuse_while_busy() -> void:
 	var result: Dictionary = await manager.install("fake_a")
 	check(not result["ok"], "refused while another action runs")
 	manager.busy = false
+
+
+## A second project on the same machine: same registry and update cache, own addons and lock.
+func _second_project(source: FakeSource) -> Manager:
+	var other_addons := root.path_join("project_b/addons")
+	DirAccess.make_dir_recursive_absolute(other_addons)
+	var other_editor := FakeEditor.new(other_addons)
+	var installer := Installer.new(other_editor, other_addons, root.path_join("backup_b"), root.path_join("staging_b"))
+	var factory := func(_entry: LoadoutRegistry.Entry) -> LoadoutSource: return source
+	return Manager.new(installer, _registry_path(), root.path_join("project_b/loadout.lock.json"), factory)
+
+
+func test_pin_applies_per_project() -> void:
+	_setup("two_projects", [_local("fake_a", "1.0.0")])
+	var source := _fake("fake_a", ["1.0.0"])
+	var other := _second_project(source)
+	await manager.refresh()
+	await manager.install_missing()
+	await other.refresh()
+	await other.install_missing()
+	check_eq(await manager.set_pinned("fake_a", true), OK, "pinned in project A")
+	source.versions["1.1.0"] = FIXTURES.path_join("1.1.0")
+	await manager.refresh(true)
+	await other.refresh(true)
+	check_eq(_status("fake_a"), Manager.Status.PINNED, "project A keeps its pin")
+	check_eq(other.get_state("fake_a").status, Manager.Status.UPDATE, "project B is offered the update")
+	var result: Dictionary = await other.install("fake_a")
+	check(result["ok"], "project B updated: %s" % result["error"])
+	await manager.refresh()
+	check_eq(manager.installer.installed_version(manager.registry.get_entry("fake_a")), "1.0.0", "project A untouched")
+	check_eq(_status("fake_a"), Manager.Status.PINNED, "still pinned")
+
+
+func test_update_ids_and_release_notes() -> void:
+	_setup("notes", [_local("fake_a", "1.0.0")])
+	var source := _fake("fake_a", ["1.0.0"])
+	await manager.refresh()
+	await manager.install_missing()
+	check(manager.update_ids().is_empty(), "no updates")
+	source.versions["1.1.0"] = FIXTURES.path_join("1.1.0")
+	source.notes["1.1.0"] = "Bug fixes."
+	await manager.refresh(true)
+	check_eq(manager.update_ids(), PackedStringArray(["fake_a"]), "update found")
+	var state := manager.get_state("fake_a")
+	check_eq(state.release_notes, "Bug fixes.", "notes of the target release")
+	check_eq(state.release_url, "https://example.com/1.1.0", "release page")
+
+
+func test_remote_source_is_checked_once_a_day() -> void:
+	_setup("remote_daily", [_local("fake_a", "1.0.0")])
+	var source := _fake("fake_a", ["1.0.0"])
+	source.remote = true
+	await manager.refresh()
+	await manager.refresh()
+	check_eq(source.list_calls, 1, "second refresh uses the cache")
+	await manager.refresh(true)
+	check_eq(source.list_calls, 2, "manual check asks again")
+
+
+func test_offline_keeps_state_with_warning() -> void:
+	_setup("offline", [_local("fake_a", "1.0.0")])
+	var source := _fake("fake_a", ["1.0.0", "1.1.0"])
+	source.remote = true
+	await manager.refresh()
+	source.fail_list = "Cannot connect."
+	await manager.refresh(true)
+	var state := manager.get_state("fake_a")
+	check_eq([state.status, state.target_version], [Manager.Status.MISSING, "1.1.0"], "cached releases still usable")
+	check(state.warning.contains("Cannot connect"), "warning for the dock: %s" % state.warning)
+
+
+func test_install_uses_releases_from_refresh() -> void:
+	_setup("remote_install", [_local("fake_a", "1.0.0")])
+	var source := _fake("fake_a", ["1.0.0"])
+	source.remote = true
+	await manager.refresh()
+	var result: Dictionary = await manager.install("fake_a")
+	check(result["ok"], "installed: %s" % result["error"])
+	check_eq(source.fetched, PackedStringArray(["1.0.0"]), "fetched once from the same source")
+
+
+func test_install_updates() -> void:
+	_setup("update_all", [_local("fake_a", "1.0.0"), _local("fake_b", "1.0.0")])
+	var source_a := _fake("fake_a", ["1.0.0"])
+	var source_b := _fake("fake_b", ["1.0.0"])
+	await manager.refresh()
+	await manager.install_missing()
+	check_eq(await manager.set_pinned("fake_b", true), OK, "b pinned")
+	source_a.versions["1.1.0"] = FIXTURES.path_join("1.1.0")
+	source_b.versions["1.1.0"] = FIXTURES.path_join("1.1.0")
+	await manager.refresh(true)
+	var summary: Dictionary = await manager.install_updates()
+	check_eq(summary["installed"], PackedStringArray(["fake_a"]), "only the unpinned plugin")
+	check_eq(_status("fake_a"), Manager.Status.OK, "a updated")
+	check_eq(_status("fake_b"), Manager.Status.PINNED, "b untouched")

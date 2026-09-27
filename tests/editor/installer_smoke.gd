@@ -9,7 +9,11 @@ extends RefCounted
 ##   godot --headless -e --path . -- --loadout-smoke=remove    # uninstall, leaves the project clean
 ## Dock (GUI, not headless; registry file prepared by the caller with fake_a 1.0.0, auto_install):
 ##   godot -e --path . -- --loadout-registry=<file> --loadout-smoke=dock
-##   startup sync offer -> install -> screenshots in user://loadout_smoke/*.png -> cleanup
+##   startup sync offer -> install -> registry points to 1.1.0 -> update from the dock
+##   (confirm with release notes) -> screenshots in user://loadout_smoke/*.png -> cleanup
+## Remote sources (needs network; registry with e.g. a GitHub entry, auto_install):
+##   godot --headless -e --path <project> -- --loadout-registry=<file> --loadout-smoke=remote
+##   forced update check, install of every registry plugin, running check, uninstall
 ## Exit code 0 = passed.
 
 const GodotEditorBridge := preload("res://addons/loadout/editor/godot_editor_bridge.gd")
@@ -52,6 +56,8 @@ func run(mode: String) -> bool:
 			await _run_remove()
 		"dock":
 			await _run_dock()
+		"remote":
+			await _run_remote()
 		_:
 			_failures.append("unknown mode %s" % mode)
 	for failure in _failures:
@@ -105,16 +111,78 @@ func _run_dock() -> void:
 	var tree: Tree = dock.get("_tree")
 	tree.get_root().get_first_child().select(0)
 	await _screenshot("dock_installed")
+
+	# A new version appears in the source: the registry now points to the 1.1.0 folder.
+	var registry_path := _cmdline_value("--loadout-registry=")
+	var original_registry := FileAccess.get_file_as_string(registry_path)
+	var registry: LoadoutRegistry = LoadoutRegistry.load_file(registry_path)["registry"]
+	(registry.get_entry("fake_a").source as Dictionary)["path"] = _fixture("1.1.0")
+	registry.save_file(registry_path)
+	await manager.refresh(true)
+	_expect(manager.update_ids() == PackedStringArray(["fake_a"]), "update offered in the dock")
+	tree.get_root().get_first_child().select(0)
+	await _screenshot("dock_update_available")
+	var update_button := _find_button(dock, "Update to 1.1.0")
+	_expect(update_button != null, "update button in the detail")
+	if update_button != null:
+		update_button.pressed.emit()
+		await _wait_until(func() -> bool: return confirm.visible, 5000)
+		await _screenshot("dock_update_confirm", confirm)
+		confirm.get_ok_button().pressed.emit()
+		await _wait_until(func() -> bool: return manager.get_state("fake_a").status == LoadoutManager.Status.OK, 30000)
+		_expect_running("1.1.0", "updated from the dock")
+		# FakeALegacy was removed in 1.1.0: the dock offers a restart, decline it.
+		if await _wait_until(func() -> bool: return confirm.visible, 5000):
+			await _screenshot("dock_restart_offer", confirm)
+			confirm.get_cancel_button().pressed.emit()
+
 	var registry_dialog: ConfirmationDialog = dock.get("_registry_dialog")
 	registry_dialog.open()
-	var path_edit: LineEdit = registry_dialog.get("_path_edit")
-	path_edit.text = _fixture("1.1.0")
-	path_edit.text_changed.emit(path_edit.text)
+	var repo_edit: LineEdit = registry_dialog.get("_repo_edit")
+	repo_edit.text = "bitwes/Gut"
+	repo_edit.text_changed.emit(repo_edit.text)
 	await _screenshot("dock_add_dialog", registry_dialog)
 	registry_dialog.hide()
-	# Cleanup: leave the project as it was (no fake_a, no lock).
+	# Cleanup: leave the project and the registry file as they were (no fake_a, no lock).
+	var file := FileAccess.open(registry_path, FileAccess.WRITE)
+	file.store_string(original_registry)
+	file.close()
 	await _installer.uninstall(_entry)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(LoadoutLockfile.DEFAULT_PATH))
+
+
+func _run_remote() -> void:
+	var manager: LoadoutManager = _plugin.get_manager()
+	await manager.refresh(true)
+	_expect(manager.errors.is_empty(), "registry and lock load: %s" % ", ".join(manager.errors))
+	for state in manager.states:
+		Log.write("remote %s: %s, latest %s, %d releases, notes %d chars, %s" % [state.id, LoadoutManager.Status.find_key(state.status),
+				state.latest_version, manager.get_source(state.id).releases.size() if manager.get_source(state.id) != null else 0,
+				state.release_notes.length(), state.message if state.message != "" else state.warning])
+		_expect(state.latest_version != "", "%s: latest version known" % state.id)
+	var summary: Dictionary = await manager.install_missing()
+	_expect(summary["failed"].is_empty(), "install: %s" % summary["failed"])
+	for state in manager.states:
+		_expect(state.status == LoadoutManager.Status.OK, "%s installed, status %s" % [state.id, LoadoutManager.Status.find_key(state.status)])
+		_expect(_installer.editor.is_plugin_running(state.entry.folder), "%s EditorPlugin running" % state.id)
+		Log.write("remote %s: installed %s, hash %s" % [state.id, state.installed_version, state.lock_entry.folder_hash.left(19) if state.lock_entry != null else "-"])
+	for state in manager.states:
+		await manager.uninstall(state.id)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(LoadoutLockfile.DEFAULT_PATH))
+
+
+func _find_button(root: Node, text_prefix: String) -> Button:
+	for node in root.find_children("*", "Button", true, false):
+		if (node as Button).text.begins_with(text_prefix):
+			return node
+	return null
+
+
+func _cmdline_value(prefix: String) -> String:
+	for arg: String in OS.get_cmdline_user_args():
+		if arg.begins_with(prefix):
+			return arg.trim_prefix(prefix)
+	return ""
 
 
 func _show_dock(dock: Control) -> void:

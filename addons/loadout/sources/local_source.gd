@@ -18,6 +18,15 @@ func describe() -> String:
 	return "Local · %s" % path
 
 
+func list_releases(_etag: String = "") -> Dictionary:
+	var version := _current_version()
+	if version == "":
+		return { "ok": false, "error": "Folder %s has no plugin.cfg with a version." % path, "not_modified": false, "etag": "", "releases": [] }
+	var release := { "version": version, "tag": version, "prerelease": LoadoutVersion.parse(version) != null and LoadoutVersion.parse(version).is_prerelease(),
+			"notes": "", "url": "", "download_url": "" }
+	return { "ok": true, "error": "", "not_modified": false, "etag": "", "releases": [release] }
+
+
 func get_latest_version(version_range: String) -> Dictionary:
 	var version := _current_version()
 	if version == "":

@@ -4,6 +4,13 @@ extends RefCounted
 
 ## Where a plugin comes from. Subclasses may await (network); callers always await the methods.
 ## Only sources/ talks to the network, core/ never does.
+##
+## Remote sources list their releases with list_releases(); LoadoutUpdateChecker caches that list
+## (once a day, ETag) and puts it into `releases`, which the other methods then use.
+
+## Known releases, newest first: [{ "version": "1.2.0", "tag": "v1.2.0", "prerelease": bool,
+## "notes": String, "url": String (release page), "download_url": String }]
+var releases: Array[Dictionary] = []
 
 
 ## Human readable description for the dock, e.g. "GitHub · bitwes/Gut".
@@ -11,15 +18,46 @@ func describe() -> String:
 	return ""
 
 
-## Highest available version within version_range.
+## Remote sources are cached and throttled by the update checker, local ones are read every time.
+func is_remote() -> bool:
+	return false
+
+
+## Key of this source in loadout_cache.json, e.g. "github:bitwes/Gut".
+func cache_key() -> String:
+	return ""
+
+
+## Lists available releases. etag of the previous answer allows a cheap "not modified" reply.
+## Returns { "ok", "error", "not_modified": bool, "etag": String, "releases": Array[Dictionary] }.
+func list_releases(_etag: String = "") -> Dictionary:
+	return { "ok": false, "error": "The source cannot list versions.", "not_modified": false, "etag": "", "releases": [] }
+
+
+## Highest known version within version_range.
 ## Returns { "ok": bool, "error": String, "version": String }.
-func get_latest_version(_version_range: String) -> Dictionary:
-	return { "ok": false, "error": "The source cannot tell its version.", "version": "" }
+func get_latest_version(version_range: String) -> Dictionary:
+	var versions: PackedStringArray = []
+	for release in releases:
+		versions.append(str(release.get("version", "")))
+	var best := LoadoutVersion.max_satisfying(versions, version_range)
+	if best == "":
+		var error := "The source has no version." if versions.is_empty() else "No version matches range %s." % version_range
+		return { "ok": false, "error": error, "version": "" }
+	return { "ok": true, "error": "", "version": best }
 
 
 ## Whether fetch(version) can deliver exactly this version (used to reinstall the locked version).
-func has_version(_version: String) -> bool:
-	return true
+func has_version(version: String) -> bool:
+	return not get_release(version).is_empty()
+
+
+## Release record of version from `releases`, {} when unknown.
+func get_release(version: String) -> Dictionary:
+	for release in releases:
+		if release.get("version", "") == version:
+			return release
+	return {}
 
 
 ## Plugin name from the source's plugin.cfg, "" when the source does not know it without fetching.
@@ -33,9 +71,12 @@ func fetch(_version: String, _dest_dir: String) -> Dictionary:
 	return { "ok": false, "error": "The source cannot download.", "path": "" }
 
 
-## Source for a validated registry source dictionary, null for types not supported yet.
-static func create(source: Dictionary) -> LoadoutSource:
-	match source.get("type"):
+## Source for a registry entry, null for types not supported yet. Remote sources need http.
+static func create(entry: LoadoutRegistry.Entry, http: LoadoutHttp = null) -> LoadoutSource:
+	match entry.source.get("type"):
 		LoadoutRegistry.SOURCE_LOCAL:
-			return LoadoutLocalSource.new(source["path"])
+			return LoadoutLocalSource.new(entry.source["path"])
+		LoadoutRegistry.SOURCE_GITHUB:
+			if http != null:
+				return LoadoutGithubSource.new(entry.source["repo"], entry.folder, http)
 	return null
