@@ -7,6 +7,8 @@ extends VBoxContainer
 
 const RegistryDialog := preload("registry_dialog.gd")
 const Status := LoadoutManager.Status
+## Characters of release notes shown in the update confirmation.
+const NOTES_PREVIEW := 600
 
 const STATUS_TEXT := {
 	Status.OK: "Up to date",
@@ -25,6 +27,7 @@ var manager: LoadoutManager
 var _info_label: Label
 var _problems_label: Label
 var _install_missing_button: Button
+var _update_all_button: Button
 var _tree: Tree
 var _detail_title: Label
 var _detail_message: Label
@@ -73,7 +76,7 @@ func _build() -> void:
 	_info_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_info_label.clip_text = true
 	header.add_child(_info_label)
-	header.add_child(_icon_button("Reload", "Reload the registry and the lock", func() -> void: _run(manager.refresh)))
+	header.add_child(_icon_button("Reload", "Check for updates (asks the sources now, not once a day)", func() -> void: _run(_check_updates)))
 	header.add_child(_icon_button("Add", "Add a plugin to the global registry", func() -> void: _registry_dialog.open()))
 
 	_problems_label = Label.new()
@@ -84,6 +87,9 @@ func _build() -> void:
 	_install_missing_button = Button.new()
 	_install_missing_button.pressed.connect(func() -> void: _run(_install_missing))
 	add_child(_install_missing_button)
+	_update_all_button = Button.new()
+	_update_all_button.pressed.connect(_confirm_update_all)
+	add_child(_update_all_button)
 
 	_tree = Tree.new()
 	_tree.columns = 3
@@ -97,7 +103,7 @@ func _build() -> void:
 	_tree.set_column_expand(2, false)
 	var scale := EditorInterface.get_editor_scale()
 	_tree.set_column_custom_minimum_width(1, roundi(84 * scale))
-	_tree.set_column_custom_minimum_width(2, roundi(64 * scale))
+	_tree.set_column_custom_minimum_width(2, roundi(104 * scale))
 	_tree.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_tree.custom_minimum_size = Vector2(0, 160)
 	_tree.item_selected.connect(_on_item_selected)
@@ -149,7 +155,7 @@ func _rebuild() -> void:
 		var item := _tree.create_item(root)
 		item.set_text(0, state.display_name)
 		item.set_tooltip_text(0, "%s\n%s" % [state.id, state.source_label])
-		item.set_tooltip_text(1, state.message)
+		item.set_tooltip_text(1, "\n".join(PackedStringArray([state.message, state.warning])).strip_edges())
 		item.set_metadata(0, state.id)
 		item.set_text(1, STATUS_TEXT[state.status])
 		item.set_custom_color(1, _status_color(state.status))
@@ -159,11 +165,18 @@ func _rebuild() -> void:
 	_info_label.text = "Registry: %d · %s" % [manager.registry.entries.size() if manager.registry != null else 0, manager.lock_path.get_file()]
 	var problems := manager.errors.duplicate()
 	problems.append_array(manager.warnings)
+	for state in manager.states:
+		if state.warning != "":
+			problems.append("Some sources are not reachable right now, using saved data (see the plugin details).")
+			break
 	_problems_label.text = "\n".join(problems)
 	_problems_label.visible = not problems.is_empty()
 	var missing := manager.missing_ids()
 	_install_missing_button.text = "Install missing (%d)" % missing.size()
 	_install_missing_button.visible = not missing.is_empty()
+	var updates := manager.update_ids()
+	_update_all_button.text = "Update all (%d)…" % updates.size()
+	_update_all_button.visible = updates.size() > 1
 	_update_detail()
 
 
@@ -179,8 +192,8 @@ func _update_detail() -> void:
 		return
 	var folder := state.entry.folder if state.entry != null else state.id
 	_detail_title.text = "%s  (addons/%s)" % [state.display_name, folder]
-	_detail_message.text = state.message
-	_detail_message.visible = state.message != ""
+	_detail_message.text = "\n".join(PackedStringArray([state.message, state.warning])).strip_edges()
+	_detail_message.visible = _detail_message.text != ""
 	if state.entry != null:
 		_add_row("Source", _short_source(state.source_label), state.source_label)
 		_add_row("Range", state.entry.version_range)
@@ -229,9 +242,37 @@ func _add_actions(state: LoadoutManager.PluginState) -> void:
 
 func _confirm_update(state: LoadoutManager.PluginState) -> void:
 	var backup := "user://loadout_backup/%s/%s/" % [state.id, state.installed_version]
-	_ask("Update %s %s → %s?\n\nThe plugin is disabled, the old version is backed up to %s, the files are replaced and the plugin is enabled again. If the new version does not start, Loadout restores %s."
-			% [state.display_name, state.installed_version, state.target_version, backup, state.installed_version],
-			"Update", func() -> Dictionary: return await manager.install(state.id))
+	var text := "Update %s %s → %s?" % [state.display_name, state.installed_version, state.target_version]
+	if state.release_notes != "":
+		var notes := state.release_notes.strip_edges()
+		if notes.length() > NOTES_PREVIEW:
+			notes = notes.left(NOTES_PREVIEW) + "…"
+		text += "\n\nRelease notes:\n%s" % notes
+	if state.release_url != "":
+		text += "\n\n%s" % state.release_url
+	text += "\n\nThe plugin is disabled, the old version is backed up to %s, the files are replaced and the plugin is enabled again. If the new version does not start, Loadout restores %s." % [backup, state.installed_version]
+	_ask(text, "Update", func() -> Dictionary: return await manager.install(state.id), "Not now")
+
+
+func _confirm_update_all() -> void:
+	var lines: PackedStringArray = []
+	for id in manager.update_ids():
+		var state := manager.get_state(id)
+		lines.append("•  %s %s → %s" % [state.display_name, state.installed_version, state.target_version])
+	_ask("Update %d plugins?\n\n%s\n\nEach one is disabled, backed up to user://loadout_backup/, replaced and enabled again. On failure its old version comes back." % [lines.size(), "\n".join(lines)],
+			"Update all", _install_updates, "Not now")
+
+
+func _check_updates() -> Dictionary:
+	await manager.refresh(true)
+	var updates := manager.update_ids()
+	if updates.is_empty() and manager.errors.is_empty():
+		return { "ok": true, "info": "All global plugins are up to date." }
+	return { "ok": true }
+
+
+func _install_updates() -> Dictionary:
+	return _summary_result(await manager.install_updates(), "Some plugins could not be updated:")
 
 
 func _overwrite_action(state: LoadoutManager.PluginState) -> void:
@@ -249,14 +290,17 @@ func _remove_action(state: LoadoutManager.PluginState) -> void:
 
 
 func _install_missing() -> Dictionary:
-	var summary: Dictionary = await manager.install_missing()
+	return _summary_result(await manager.install_missing(), "Some plugins could not be installed:")
+
+
+func _summary_result(summary: Dictionary, heading: String) -> Dictionary:
 	var failed: Dictionary = summary["failed"]
 	if failed.is_empty():
 		return { "ok": true }
 	var lines: PackedStringArray = []
 	for id: String in failed:
 		lines.append("•  %s: %s" % [id, failed[id]])
-	return { "ok": false, "error": "Some plugins could not be installed:\n\n" + "\n".join(lines) }
+	return { "ok": false, "error": "%s\n\n%s" % [heading, "\n".join(lines)] }
 
 
 ## Runs an action (may await), keeps the dock disabled meanwhile and reports the result.
@@ -273,6 +317,8 @@ func _handle_result(result: Variant) -> void:
 	match typeof(result):
 		TYPE_DICTIONARY:
 			if result.get("ok", false):
+				if result.get("info", "") != "":
+					_show_alert(result["info"])
 				return
 			if result.get("needs_confirmation", "") != "":
 				var id: String = result["id"]
@@ -297,6 +343,7 @@ func _set_busy(busy: bool) -> void:
 	_busy = busy
 	_busy_label.visible = busy
 	_install_missing_button.disabled = busy
+	_update_all_button.disabled = busy
 	for child in _detail_actions.get_children():
 		if child is Button:
 			child.disabled = busy

@@ -1,11 +1,20 @@
 @tool
 extends ConfirmationDialog
 
-## "Add plugin to registry" for a local plugin folder (GitHub and Asset Library come in F2/F3).
-## Emits the raw registry entry; LoadoutManager validates and saves it.
+## "Add plugin to registry" for a GitHub repository (Releases) or a local plugin folder
+## (Asset Library comes in F3). Emits the raw registry entry; LoadoutManager validates and saves it.
 
 signal entry_submitted(data: Dictionary)
 
+const SOURCE_GITHUB := 0
+const SOURCE_LOCAL := 1
+
+var _source_option: OptionButton
+var _github_box: VBoxContainer
+var _local_box: VBoxContainer
+var _repo_edit: LineEdit
+var _auto_names := true
+var _setting_names := false
 var _path_edit: LineEdit
 var _info_label: Label
 var _error_label: Label
@@ -26,9 +35,33 @@ func _init() -> void:
 	box.add_theme_constant_override("separation", 8)
 	add_child(box)
 
-	box.add_child(_caption("Local plugin folder (contains plugin.cfg)"))
+	var source_row := HBoxContainer.new()
+	box.add_child(source_row)
+	source_row.add_child(_caption("Source"))
+	_source_option = OptionButton.new()
+	_source_option.add_item("GitHub Releases", SOURCE_GITHUB)
+	_source_option.add_item("Local folder", SOURCE_LOCAL)
+	_source_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_source_option.item_selected.connect(func(_index: int) -> void: _on_source_changed())
+	source_row.add_child(_source_option)
+
+	_github_box = VBoxContainer.new()
+	box.add_child(_github_box)
+	_github_box.add_child(_caption("Repository (owner/name or https://github.com/owner/name)"))
+	_repo_edit = LineEdit.new()
+	_repo_edit.placeholder_text = "bitwes/Gut"
+	_repo_edit.text_changed.connect(func(_text: String) -> void: _on_repo_changed())
+	_github_box.add_child(_repo_edit)
+	var github_note := _caption("Loadout installs the release's zip asset (or the tag's source zip). The folder below must match the plugin's folder in addons/ inside the release.")
+	github_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	github_note.custom_minimum_size.x = width
+	_github_box.add_child(github_note)
+
+	_local_box = VBoxContainer.new()
+	box.add_child(_local_box)
+	_local_box.add_child(_caption("Local plugin folder (contains plugin.cfg)"))
 	var path_row := HBoxContainer.new()
-	box.add_child(path_row)
+	_local_box.add_child(path_row)
 	_path_edit = LineEdit.new()
 	_path_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_path_edit.placeholder_text = "/cesta/k/addons/muj_plugin"
@@ -43,7 +76,7 @@ func _init() -> void:
 	_info_label = Label.new()
 	_info_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_info_label.custom_minimum_size.x = width
-	box.add_child(_info_label)
+	_local_box.add_child(_info_label)
 	_error_label = Label.new()
 	_error_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_error_label.custom_minimum_size.x = width
@@ -58,8 +91,8 @@ func _init() -> void:
 	_folder_edit = _labeled_edit(grid, "Folder in addons/", "")
 	_range_edit = _labeled_edit(grid, "Allowed versions", "*")
 	_range_edit.tooltip_text = "* = always the newest, ^1.2.0 = minor and patch updates, ~1.2.0 = patch updates only"
-	_id_edit.text_changed.connect(func(_text: String) -> void: _validate())
-	_folder_edit.text_changed.connect(func(_text: String) -> void: _validate())
+	_id_edit.text_changed.connect(func(_text: String) -> void: _on_name_edited())
+	_folder_edit.text_changed.connect(func(_text: String) -> void: _on_name_edited())
 	_range_edit.text_changed.connect(func(_text: String) -> void: _validate())
 
 	_auto_check = CheckBox.new()
@@ -67,7 +100,7 @@ func _init() -> void:
 	_auto_check.button_pressed = true
 	box.add_child(_auto_check)
 
-	var note := _caption("GitHub Releases and the Asset Library come in later versions. The registry applies to all projects on this computer.")
+	var note := _caption("The registry applies to all projects on this computer. The Asset Library comes in a later version.")
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	note.custom_minimum_size.x = width
 	box.add_child(note)
@@ -83,14 +116,53 @@ func _init() -> void:
 
 
 func open() -> void:
+	_auto_names = true
+	_repo_edit.text = ""
 	_path_edit.text = ""
 	_id_edit.text = ""
 	_folder_edit.text = ""
 	_range_edit.text = "*"
 	_auto_check.button_pressed = true
-	_update_from_path()
+	_on_source_changed()
 	reset_size()
 	popup_centered()
+
+
+func _on_source_changed() -> void:
+	var github := _is_github()
+	_github_box.visible = github
+	_local_box.visible = not github
+	if github:
+		_on_repo_changed()
+	else:
+		_update_from_path()
+	reset_size()
+
+
+func _on_repo_changed() -> void:
+	if _auto_names:
+		# Suggest names from the repository: "owner/godot-dialogue-manager" -> "godot_dialogue_manager".
+		var name := _repo_edit.text.strip_edges().trim_suffix("/").trim_suffix(".git").get_file().to_lower().replace("-", "_")
+		_set_names(name)
+	_validate()
+
+
+func _on_name_edited() -> void:
+	if not _setting_names:
+		_auto_names = false
+	_validate()
+
+
+
+func _set_names(name: String) -> void:
+	_setting_names = true
+	_id_edit.text = name
+	_folder_edit.text = name
+	_setting_names = false
+
+
+func _is_github() -> bool:
+	return _source_option.get_selected_id() == SOURCE_GITHUB
 
 
 func _on_browse_pressed() -> void:
@@ -112,11 +184,8 @@ func _update_from_path() -> void:
 	if path != _path_edit.text.strip_edges():
 		_path_edit.text = path
 	_info_label.text = "Found plugin %s, version %s." % [cfg.get_value("plugin", "name", "?"), cfg.get_value("plugin", "version", "?")]
-	var folder := path.trim_suffix("/").get_file()
-	if _folder_edit.text == "":
-		_folder_edit.text = folder
-	if _id_edit.text == "":
-		_id_edit.text = folder
+	if _auto_names:
+		_set_names(path.trim_suffix("/").get_file())
 	_validate()
 
 
@@ -135,17 +204,19 @@ func _plugin_dir(path: String) -> String:
 
 
 func _validate() -> void:
-	var has_plugin := _plugin_dir(_path_edit.text.strip_edges()) != ""
+	var has_source := _repo_edit.text.strip_edges() != "" if _is_github() else _plugin_dir(_path_edit.text.strip_edges()) != ""
 	var parsed := LoadoutRegistry.parse_entry(_entry_data())
-	_error_label.text = parsed["error"] if has_plugin and not parsed["ok"] else ""
-	get_ok_button().disabled = not has_plugin or not parsed["ok"]
+	_error_label.text = parsed["error"] if has_source and not parsed["ok"] else ""
+	_error_label.visible = _error_label.text != ""
+	get_ok_button().disabled = not has_source or not parsed["ok"]
 
 
 func _entry_data() -> Dictionary:
 	return {
 		"id": _id_edit.text.strip_edges(),
 		"folder": _folder_edit.text.strip_edges(),
-		"source": { "type": LoadoutRegistry.SOURCE_LOCAL, "path": _path_edit.text.strip_edges() },
+		"source": { "type": LoadoutRegistry.SOURCE_GITHUB, "repo": _repo_edit.text.strip_edges() } if _is_github()
+				else { "type": LoadoutRegistry.SOURCE_LOCAL, "path": _path_edit.text.strip_edges() },
 		"range": _range_edit.text.strip_edges(),
 		"auto_install": _auto_check.button_pressed,
 	}
