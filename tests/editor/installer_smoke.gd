@@ -14,6 +14,11 @@ extends RefCounted
 ## Remote sources (needs network; registry with e.g. a GitHub entry, auto_install):
 ##   godot --headless -e --path <project> -- --loadout-registry=<file> --loadout-smoke=remote
 ##   forced update check, install of every registry plugin, running check, uninstall
+## Self-update (GUI or headless; registry has a "gam" entry pointing to a newer Loadout copy):
+##   godot -e --path <project> -- --loadout-registry=<file> --loadout-smoke=self
+##   first run updates Loadout from the dock and the editor restarts itself. Godot relaunches it
+##   without --headless and without the arguments after "--", so close that editor and run the
+##   same command again: the second run checks the new version and writes user://loadout_smoke/self.txt
 ## Exit code 0 = passed.
 
 const GodotEditorBridge := preload("res://addons/loadout/editor/godot_editor_bridge.gd")
@@ -58,6 +63,8 @@ func run(mode: String) -> bool:
 			await _run_dock()
 		"remote":
 			await _run_remote()
+		"self":
+			await _run_self()
 		_:
 			_failures.append("unknown mode %s" % mode)
 	for failure in _failures:
@@ -142,6 +149,23 @@ func _run_dock() -> void:
 	repo_edit.text = "bitwes/Gut"
 	repo_edit.text_changed.emit(repo_edit.text)
 	await _screenshot("dock_add_dialog", registry_dialog)
+	# Asset Library tab with a canned search (no network in this smoke test).
+	registry_dialog.set("assetlib_search", func(_query: String) -> Dictionary:
+		return { "ok": true, "error": "", "results": [
+			{ "asset_id": "1709", "title": "Debug Draw 3D", "author": "DmitriySalnikov", "version_string": "1.5.1", "godot_version": "4.5", "category": "Tools" },
+			{ "asset_id": "2101", "title": "Debug Menu", "author": "someone", "version_string": "1.2.0", "godot_version": "4.4", "category": "Tools" },
+		] })
+	var source_option: OptionButton = registry_dialog.get("_source_option")
+	source_option.select(source_option.get_item_index(2))
+	source_option.item_selected.emit(source_option.selected)
+	var query_edit: LineEdit = registry_dialog.get("_query_edit")
+	query_edit.text = "debug draw"
+	await registry_dialog.call("_search")
+	var results: ItemList = registry_dialog.get("_results")
+	results.select(0)
+	results.item_selected.emit(0)
+	_expect((registry_dialog.get("_folder_edit") as LineEdit).text == "debug_draw_3d", "folder suggested from the title")
+	await _screenshot("dock_add_assetlib", registry_dialog)
 	registry_dialog.hide()
 	# Cleanup: leave the project and the registry file as they were (no fake_a, no lock).
 	var file := FileAccess.open(registry_path, FileAccess.WRITE)
@@ -169,6 +193,57 @@ func _run_remote() -> void:
 	for state in manager.states:
 		await manager.uninstall(state.id)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(LoadoutLockfile.DEFAULT_PATH))
+
+
+func _run_self() -> void:
+	var manager: LoadoutManager = _plugin.get_manager()
+	var dock: Control = _plugin.get_dock()
+	await manager.refresh(true)
+	var state := manager.get_state("gam")
+	if state == null:
+		_failures.append("registry has no gam entry")
+		return
+	var report := SMOKE_DIR.path_join("self.txt")
+	if state.status == LoadoutManager.Status.UPDATE:
+		# First session: update through the dock; it restarts the editor by itself.
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(report))
+		_write_text(report, "updating %s -> %s" % [state.installed_version, state.target_version])
+		_show_dock(dock)
+		var tree: Tree = dock.get("_tree")
+		tree.get_root().get_first_child().select(0)
+		var button := _find_button(dock, "Update to")
+		_expect(button != null, "update button for Loadout")
+		if button == null:
+			return
+		button.pressed.emit()
+		var confirm: ConfirmationDialog = dock.get("_confirm")
+		await _wait_until(func() -> bool: return confirm.visible, 5000)
+		_expect(confirm.dialog_text.contains("restarts"), "confirmation says the editor restarts")
+		confirm.get_ok_button().pressed.emit()
+		# The restart quits this session; waiting here keeps the smoke from quitting first.
+		await _wait_until(func() -> bool: return false, 30000)
+		_failures.append("editor did not restart after the self-update")
+		return
+	# Second session after the restart.
+	var gam_version := _cfg_version("res://addons/loadout/plugin.cfg")
+	_expect(state.status == LoadoutManager.Status.OK, "Loadout state after restart: %s" % LoadoutManager.Status.find_key(state.status))
+	_expect(gam_version == state.latest_version, "running Loadout %s is the newest %s" % [gam_version, state.latest_version])
+	_expect(state.lock_entry != null and state.lock_entry.version == gam_version, "lock records %s" % gam_version)
+	_expect(EditorInterface.is_plugin_enabled("loadout") and dock.is_inside_tree(), "Loadout enabled and its dock is up")
+	_write_text(report, "passed %s" % gam_version if _failures.is_empty() else "failed: " + "; ".join(_failures))
+
+
+func _cfg_version(path: String) -> String:
+	var cfg := ConfigFile.new()
+	cfg.load(path)
+	return str(cfg.get_value("plugin", "version", ""))
+
+
+func _write_text(path: String, text: String) -> void:
+	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(text)
+	file.close()
 
 
 func _find_button(root: Node, text_prefix: String) -> Button:

@@ -70,6 +70,7 @@ func install(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: Strin
 	var result := {
 		"ok": false, "error": "", "id": entry.id, "from": installed_version(entry), "to": version,
 		"hash": "", "backup_path": "", "restored": false, "restart_recommended": false, "needs_confirmation": "",
+		"warning": "",
 	}
 	if not force:
 		var reason := check_overwrite(entry, lock_entry)
@@ -88,6 +89,9 @@ func install(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: Strin
 	if not FileAccess.file_exists(staged.path_join("plugin.cfg")):
 		Fs.remove_dir(staging)
 		return _fail(result, "Package %s %s has no plugin.cfg." % [entry.id, version])
+	result["warning"] = str(fetched.get("warning", ""))
+	if result["warning"] != "":
+		Log.write(result["warning"], Log.Level.WARNING)
 	_preserve_uids(target_dir(entry), staged)
 
 	if DirAccess.dir_exists_absolute(target_dir(entry)):
@@ -105,6 +109,52 @@ func install(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: Strin
 	else:
 		Log.write("Updated %s %s -> %s." % [entry.id, result["from"], version])
 		plugin_updated.emit(entry.id, result["from"], version)
+	return result
+
+
+## Replaces Loadout's own folder. Loadout cannot disable itself (that would stop this very code), so the
+## files are swapped while it runs, without scan or reload: the running scripts stay in memory and
+## the new version loads after the editor restart that must follow right away.
+## Returns the same dictionary as install() plus "restart_required": true on success.
+func self_update(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: String) -> Dictionary:
+	var result := {
+		"ok": false, "error": "", "id": entry.id, "from": installed_version(entry), "to": version,
+		"hash": "", "backup_path": "", "restored": false, "restart_recommended": false,
+		"needs_confirmation": "", "restart_required": false,
+	}
+	var staging := staging_root.path_join(entry.id)
+	Fs.remove_dir(staging)
+	var fetched: Dictionary = await source.fetch(version, staging)
+	if not fetched["ok"]:
+		Fs.remove_dir(staging)
+		return _fail(result, "Download of Loadout %s failed: %s" % [version, fetched["error"]])
+	var staged: String = fetched["path"]
+	if not FileAccess.file_exists(staged.path_join("plugin.cfg")):
+		Fs.remove_dir(staging)
+		return _fail(result, "Loadout package %s has no plugin.cfg." % version)
+	var target := target_dir(entry)
+	_preserve_uids(target, staged)
+	var backup := _backup_path(entry, result["from"])
+	var err := _copy_fresh(target, backup)
+	if err != OK:
+		Fs.remove_dir(staging)
+		return _fail(result, "Backup of Loadout failed: %s" % error_string(err))
+	result["backup_path"] = backup
+	err = Fs.remove_dir(target)
+	if err == OK:
+		err = Fs.copy_dir(staged, target)
+	Fs.remove_dir(staging)
+	if err != OK:
+		var restored := Fs.remove_dir(target) == OK and Fs.copy_dir(backup, target) == OK
+		result["restored"] = restored
+		result["restart_recommended"] = not restored
+		return _fail(result, "Replacing Loadout files failed (%s). %s" % [error_string(err),
+				"Version %s restored." % result["from"] if restored else "Restore the backup from %s and restart the editor." % backup])
+	result["ok"] = true
+	result["restart_required"] = true
+	result["hash"] = Fs.hash_dir(target)
+	Log.write("Loadout updated %s -> %s, restarting the editor." % [result["from"], version])
+	plugin_updated.emit(entry.id, result["from"], version)
 	return result
 
 

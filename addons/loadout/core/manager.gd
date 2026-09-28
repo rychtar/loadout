@@ -8,13 +8,15 @@ extends RefCounted
 const Fs := preload("../util/fs.gd")
 const Log := preload("../util/log.gd")
 
-## Loadout's own folder; replacing it while it runs comes with self-update in F3.
+## Loadout's own folder: it can be updated (installer.self_update + editor restart), never removed.
 const SELF_FOLDER := "loadout"
 
 ## Emitted after refresh() and after every action, the dock rebuilds from `states`.
 signal states_changed()
 ## An installed or updated plugin left stale class_name entries; offer an editor restart.
 signal restart_recommended()
+## Loadout replaced its own files; the editor must restart now (the dock does it).
+signal restart_required()
 
 enum Status {
 	OK,          ## installed, matches the lock, no newer version in range
@@ -174,6 +176,8 @@ func install(id: String, force: bool = false) -> Dictionary:
 	var source: LoadoutSource = _sources.get(id)
 	if source == null:
 		return _error_result(id, "Source type %s is not supported." % state.entry.source.get("type"))
+	if state.entry.folder == SELF_FOLDER:
+		return await _self_update(state, source, force)
 	busy = true
 	var result: Dictionary = await installer.install(state.entry, source, state.target_version, state.lock_entry, force)
 	if result["ok"]:
@@ -191,6 +195,8 @@ func install(id: String, force: bool = false) -> Dictionary:
 func uninstall(id: String) -> Dictionary:
 	var state := get_state(id)
 	var refusal := _refuse_action(state)
+	if refusal == "" and state.entry.folder == SELF_FOLDER:
+		refusal = "Loadout cannot remove itself. Disable it in Project Settings → Plugins and delete its folder by hand."
 	if refusal != "":
 		return _error_result(id, refusal)
 	busy = true
@@ -235,6 +241,49 @@ func forget(id: String) -> Error:
 	if not _lock_ok or not lockfile.remove(id):
 		return ERR_DOES_NOT_EXIST
 	return await _save_and_update(id)
+
+
+## Writes the global registry to path (for another machine or a backup).
+func export_registry(path: String) -> Error:
+	if not _registry_ok:
+		return ERR_FILE_CORRUPT
+	return registry.save_file(path)
+
+
+## Adds entries from a registry file whose ids are not in the registry yet; existing ones stay.
+## Returns { "ok", "error", "added": PackedStringArray, "skipped": { id: reason },
+## "warnings": PackedStringArray (invalid entries in the file) }.
+func import_registry(path: String) -> Dictionary:
+	var summary := { "ok": false, "error": "", "added": PackedStringArray(), "skipped": {}, "warnings": PackedStringArray() }
+	if not _registry_ok:
+		summary["error"] = "The registry cannot be read, nothing changed."
+		return summary
+	var loaded := LoadoutRegistry.load_file(path)
+	if loaded["ok"] and loaded["missing"]:
+		loaded = { "ok": false, "error": "File %s does not exist." % path }
+	if not loaded["ok"]:
+		summary["error"] = loaded["error"]
+		return summary
+	var other: LoadoutRegistry = loaded["registry"]
+	summary["warnings"] = other.warnings
+	for entry in other.entries:
+		if registry.get_entry(entry.id) != null:
+			summary["skipped"][entry.id] = "already in the registry"
+			continue
+		var error := registry.add_entry(entry.to_dict())
+		if error != "":
+			summary["skipped"][entry.id] = error
+		else:
+			summary["added"].append(entry.id)
+	if not summary["added"].is_empty():
+		var err := registry.save_file(registry_path)
+		if err != OK:
+			summary["error"] = "Saving the registry failed: %s" % error_string(err)
+			await refresh()
+			return summary
+	summary["ok"] = true
+	await refresh()
+	return summary
 
 
 ## Adds a raw entry to the global registry and saves it. Returns "" or an error message.
@@ -322,7 +371,11 @@ func _compute_state(entry: LoadoutRegistry.Entry, check_updates: bool = false) -
 		_add_release_info(state, source)
 		return state
 
-	match installer.check_overwrite(entry, state.lock_entry):
+	var overwrite := installer.check_overwrite(entry, state.lock_entry)
+	if overwrite == LoadoutInstaller.CONFIRM_UNMANAGED and entry.folder == SELF_FOLDER:
+		# Loadout itself arrives by the install script, not through the lock.
+		overwrite = ""
+	match overwrite:
 		LoadoutInstaller.CONFIRM_UNMANAGED:
 			state.status = Status.UNMANAGED
 			state.message = "The folder exists, but Loadout did not install it."
@@ -355,6 +408,23 @@ func _add_release_info(state: PluginState, source: LoadoutSource) -> void:
 	state.release_url = str(release.get("url", ""))
 
 
+func _self_update(state: PluginState, source: LoadoutSource, force: bool) -> Dictionary:
+	if not force:
+		var reason := installer.check_overwrite(state.entry, state.lock_entry)
+		if reason == LoadoutInstaller.CONFIRM_MODIFIED or reason == LoadoutInstaller.CONFIRM_PINNED:
+			var result := _error_result(state.id, "Loadout is %s in this project." % ("edited by hand" if reason == LoadoutInstaller.CONFIRM_MODIFIED else "pinned"))
+			result["needs_confirmation"] = reason
+			return result
+	busy = true
+	var result: Dictionary = await installer.self_update(state.entry, source, state.target_version)
+	if result["ok"]:
+		lockfile.set_installed(state.id, state.target_version, result["hash"], _today())
+		_save_lock()
+		restart_required.emit()
+	busy = false
+	return result
+
+
 func _orphan_state(id: String) -> PluginState:
 	var state := PluginState.new()
 	state.id = id
@@ -384,8 +454,6 @@ func _refuse_action(state: PluginState) -> String:
 		return "Another action is running."
 	if state == null or state.entry == null:
 		return "The plugin is not in the registry."
-	if state.entry.folder == SELF_FOLDER:
-		return "Loadout cannot update itself yet."
 	if not _lock_ok:
 		return "The lock cannot be read, nothing changed."
 	return ""

@@ -372,3 +372,87 @@ func test_install_updates() -> void:
 	check_eq(summary["installed"], PackedStringArray(["fake_a"]), "only the unpinned plugin")
 	check_eq(_status("fake_a"), Manager.Status.OK, "a updated")
 	check_eq(_status("fake_b"), Manager.Status.PINNED, "b untouched")
+
+
+func _gam_package(version: String) -> String:
+	var dir := temp_dir("manager_gam_pkg_" + version)
+	write_text(dir.path_join("plugin.cfg"), "[plugin]\n\nname=\"Loadout\"\nversion=\"%s\"\nscript=\"plugin.gd\"\n" % version)
+	write_text(dir.path_join("plugin.gd"), "@tool\nextends EditorPlugin\n# %s\n" % version)
+	return dir
+
+
+func _setup_gam(name: String) -> FakeSource:
+	_setup(name, [{ "id": "gam", "folder": "loadout", "source": { "type": "local", "path": "/gam" } }])
+	Fs.copy_dir(_gam_package("0.0.1"), addons.path_join("loadout"))
+	var source := FakeSource.new({ "0.0.1": _gam_package("0.0.1") })
+	fake_sources["gam"] = source
+	return source
+
+
+func test_gam_is_managed_without_lock_entry() -> void:
+	var source := _setup_gam("self_state")
+	await manager.refresh()
+	check_eq(_status("gam"), Manager.Status.OK, "Loadout copied by the install script is not 'unmanaged'")
+	source.versions["0.0.2"] = _gam_package("0.0.2")
+	await manager.refresh(true)
+	check_eq(_status("gam"), Manager.Status.UPDATE, "self update offered")
+
+
+func test_self_update_requests_restart() -> void:
+	var source := _setup_gam("self_update")
+	source.versions["0.0.2"] = _gam_package("0.0.2")
+	await manager.refresh()
+	var restarts := [0]
+	manager.restart_required.connect(func() -> void: restarts[0] += 1)
+	var result: Dictionary = await manager.install("gam")
+	check(result["ok"], "ok: %s" % result["error"])
+	check_eq(restarts[0], 1, "restart requested")
+	check(editor.calls.is_empty(), "Loadout never disabled itself")
+	check_eq(_saved_lock().get_entry("gam").version, "0.0.2", "lock updated before the restart")
+
+
+func test_gam_cannot_be_uninstalled() -> void:
+	_setup_gam("self_uninstall")
+	await manager.refresh()
+	var result: Dictionary = await manager.uninstall("gam")
+	check(not result["ok"], "refused")
+	check(DirAccess.dir_exists_absolute(addons.path_join("loadout")), "still there")
+
+
+func test_export_registry() -> void:
+	_setup("export", [_local("fake_a", "1.0.0")])
+	await manager.refresh()
+	var path := root.path_join("export/registry.json")
+	check_eq(manager.export_registry(path), OK, "exported")
+	var exported := Registry.load_file(path)
+	check(exported["ok"], "valid registry file")
+	check_eq((exported["registry"] as Registry).to_dict(), manager.registry.to_dict(), "same content")
+
+
+func test_import_registry_adds_new_entries_only() -> void:
+	_setup("import", [_local("fake_a", "1.0.0")])
+	await manager.refresh()
+	var path := root.path_join("import/registry.json")
+	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+	write_text(path, JSON.stringify({ "schema": 1, "plugins": [
+		_local("fake_a", "1.1.0"),
+		{ "id": "gut", "folder": "gut", "source": { "type": "github", "repo": "bitwes/Gut" } },
+		{ "id": "bad", "folder": "../bad", "source": { "type": "local", "path": "/x" } },
+	] }))
+	var summary: Dictionary = await manager.import_registry(path)
+	check(summary["ok"], "ok: %s" % summary["error"])
+	check_eq(summary["added"], PackedStringArray(["gut"]), "new entry added")
+	check(summary["skipped"].has("fake_a"), "existing id kept, not overwritten")
+	check_eq(manager.registry.get_entry("fake_a").source["path"], _local("fake_a", "1.0.0")["source"]["path"], "local entry unchanged")
+	check(Registry.load_file(_registry_path())["registry"].get_entry("gut") != null, "saved")
+	check_eq(summary["warnings"].size(), 1, "invalid entry reported")
+
+
+func test_import_invalid_file() -> void:
+	_setup("import_invalid", [])
+	await manager.refresh()
+	var path := root.path_join("import/not_registry.json")
+	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+	write_text(path, "{ \"schema\": 1, \"plugins\": {} }")
+	check(not (await manager.import_registry(path))["ok"], "not a registry")
+	check(not (await manager.import_registry(root.path_join("missing.json")))["ok"], "missing file")
