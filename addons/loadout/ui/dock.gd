@@ -22,7 +22,15 @@ const STATUS_TEXT := {
 	Status.ORPHAN: "Not in registry",
 }
 
+const MENU_EXPORT := 0
+const MENU_IMPORT := 1
+const MENU_TOKEN := 2
+
 var manager: LoadoutManager
+## func(query: String) -> Dictionary (LoadoutAssetlibSource.search), set by plugin.gd.
+var assetlib_search: Callable
+## Restart the editor right after Loadout updated itself (smoke tests switch it off).
+var auto_restart := true
 
 var _info_label: Label
 var _problems_label: Label
@@ -37,6 +45,8 @@ var _busy_label: Label
 var _confirm: ConfirmationDialog
 var _alert: AcceptDialog
 var _registry_dialog: RegistryDialog
+var _export_dialog: EditorFileDialog
+var _import_dialog: EditorFileDialog
 var _on_confirm: Callable
 var _selected_id := ""
 var _busy := false
@@ -49,11 +59,12 @@ func _ready() -> void:
 	_build()
 	manager.states_changed.connect(_rebuild)
 	manager.restart_recommended.connect(_offer_restart)
+	manager.restart_required.connect(_on_restart_required)
 	_rebuild()
 
 
 func _exit_tree() -> void:
-	for dialog: Window in [_confirm, _alert, _registry_dialog]:
+	for dialog: Window in [_confirm, _alert, _registry_dialog, _export_dialog, _import_dialog]:
 		if is_instance_valid(dialog):
 			dialog.queue_free()
 
@@ -78,6 +89,17 @@ func _build() -> void:
 	header.add_child(_info_label)
 	header.add_child(_icon_button("Reload", "Check for updates (asks the sources now, not once a day)", func() -> void: _run(_check_updates)))
 	header.add_child(_icon_button("Add", "Add a plugin to the global registry", func() -> void: _registry_dialog.open()))
+	var menu := MenuButton.new()
+	menu.flat = true
+	menu.tooltip_text = "More actions"
+	menu.icon = EditorInterface.get_editor_theme().get_icon("GuiTabMenuHl", "EditorIcons")
+	var popup := menu.get_popup()
+	popup.add_item("Export registry…", MENU_EXPORT)
+	popup.add_item("Import registry…", MENU_IMPORT)
+	popup.add_separator()
+	popup.add_item("GitHub token…", MENU_TOKEN)
+	popup.id_pressed.connect(_on_menu)
+	header.add_child(menu)
 
 	_problems_label = Label.new()
 	_problems_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -142,7 +164,17 @@ func _build() -> void:
 	_alert.dialog_autowrap = true
 	_alert.min_size = dialog_size
 	base.add_child(_alert)
+	_export_dialog = _file_dialog(EditorFileDialog.FILE_MODE_SAVE_FILE, "Export global registry")
+	_export_dialog.current_file = "loadout_registry.json"
+	_export_dialog.file_selected.connect(func(path: String) -> void:
+		var err := manager.export_registry(path)
+		_show_alert("Registry saved to %s." % path if err == OK else "Export failed: %s" % error_string(err)))
+	base.add_child(_export_dialog)
+	_import_dialog = _file_dialog(EditorFileDialog.FILE_MODE_OPEN_FILE, "Import registry")
+	_import_dialog.file_selected.connect(func(path: String) -> void: _run(_import_registry.bind(path)))
+	base.add_child(_import_dialog)
 	_registry_dialog = RegistryDialog.new()
+	_registry_dialog.assetlib_search = assetlib_search
 	_registry_dialog.entry_submitted.connect(func(data: Dictionary) -> void:
 		_run(func() -> String: return await manager.add_registry_entry(data)))
 	base.add_child(_registry_dialog)
@@ -242,7 +274,19 @@ func _add_actions(state: LoadoutManager.PluginState) -> void:
 
 func _confirm_update(state: LoadoutManager.PluginState) -> void:
 	var backup := "user://loadout_backup/%s/%s/" % [state.id, state.installed_version]
+	if state.entry.folder == LoadoutManager.SELF_FOLDER:
+		_ask("Update Loadout %s → %s?%s\n\nGAM replaces its files (backup in %s) and the editor restarts right away. Unsaved scenes are saved before the restart."
+				% [state.installed_version, state.target_version, _notes_text(state), backup],
+				"Update and restart", func() -> Dictionary: return await manager.install(state.id), "Not now")
+		return
 	var text := "Update %s %s → %s?" % [state.display_name, state.installed_version, state.target_version]
+	text += _notes_text(state)
+	text += "\n\nThe plugin is disabled, the old version is backed up to %s, the files are replaced and the plugin is enabled again. If the new version does not start, Loadout restores %s." % [backup, state.installed_version]
+	_ask(text, "Update", func() -> Dictionary: return await manager.install(state.id), "Not now")
+
+
+func _notes_text(state: LoadoutManager.PluginState) -> String:
+	var text := ""
 	if state.release_notes != "":
 		var notes := state.release_notes.strip_edges()
 		if notes.length() > NOTES_PREVIEW:
@@ -250,8 +294,34 @@ func _confirm_update(state: LoadoutManager.PluginState) -> void:
 		text += "\n\nRelease notes:\n%s" % notes
 	if state.release_url != "":
 		text += "\n\n%s" % state.release_url
-	text += "\n\nThe plugin is disabled, the old version is backed up to %s, the files are replaced and the plugin is enabled again. If the new version does not start, Loadout restores %s." % [backup, state.installed_version]
-	_ask(text, "Update", func() -> Dictionary: return await manager.install(state.id), "Not now")
+	return text
+
+
+func _on_menu(id: int) -> void:
+	match id:
+		MENU_EXPORT:
+			_export_dialog.popup_file_dialog()
+		MENU_IMPORT:
+			_import_dialog.popup_file_dialog()
+		MENU_TOKEN:
+			_show_alert("A token raises the GitHub API limit from 60 to 5000 requests per hour. A fine-grained token with read access to public repositories is enough.\n\nSet it in Editor → Editor Settings → Loadout → Github Token. It is stored only in this computer's editor settings, never in the project or the log.")
+
+
+func _import_registry(path: String) -> Dictionary:
+	var summary: Dictionary = await manager.import_registry(path)
+	if not summary["ok"]:
+		return { "ok": false, "error": "Import failed: %s" % summary["error"] }
+	var lines: PackedStringArray = ["Added: %d" % summary["added"].size()]
+	for id: String in summary["skipped"]:
+		lines.append("•  %s skipped: %s" % [id, summary["skipped"][id]])
+	for warning: String in summary["warnings"]:
+		lines.append("•  %s" % warning)
+	return { "ok": true, "info": "\n".join(lines) }
+
+
+func _on_restart_required() -> void:
+	if auto_restart:
+		EditorInterface.restart_editor(true)
 
 
 func _confirm_update_all() -> void:
@@ -317,8 +387,9 @@ func _handle_result(result: Variant) -> void:
 	match typeof(result):
 		TYPE_DICTIONARY:
 			if result.get("ok", false):
-				if result.get("info", "") != "":
-					_show_alert(result["info"])
+				var notice := "\n\n".join(PackedStringArray([result.get("info", ""), result.get("warning", "")])).strip_edges()
+				if notice != "":
+					_show_alert(notice)
 				return
 			if result.get("needs_confirmation", "") != "":
 				var id: String = result["id"]
@@ -402,6 +473,15 @@ func _short_source(label: String) -> String:
 		return label
 	var segments := parts[1].trim_suffix("/").split("/")
 	return "%s · …/%s" % [parts[0], "/".join(segments.slice(-2))]
+
+
+func _file_dialog(mode: EditorFileDialog.FileMode, title: String) -> EditorFileDialog:
+	var dialog := EditorFileDialog.new()
+	dialog.file_mode = mode
+	dialog.access = EditorFileDialog.ACCESS_FILESYSTEM
+	dialog.title = title
+	dialog.add_filter("*.json", "Loadout registry")
+	return dialog
 
 
 func _icon_button(icon: String, tooltip: String, callable: Callable) -> Button:

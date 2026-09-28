@@ -8,6 +8,8 @@ const GodotEditorBridge := preload("editor/godot_editor_bridge.gd")
 const Dock := preload("ui/dock.gd")
 
 const REGISTRY_FILE := "loadout_registry.json"
+## Optional GitHub token (raises the API limit). Editor Settings are per user, never in the project.
+const TOKEN_SETTING := "loadout/github_token"
 ## Development only: use another registry file instead of the one in the editor config dir
 ## (the update cache then lives next to it).
 const REGISTRY_ARG_PREFIX := "--loadout-registry="
@@ -28,10 +30,16 @@ func _enter_tree() -> void:
 	var checker := LoadoutUpdateChecker.new(registry_path.get_base_dir().path_join(LoadoutUpdateChecker.FILE_NAME))
 	# HTTPRequest nodes are created under this plugin node (rule: no own threads).
 	var http := LoadoutHttp.new(self)
-	var factory := func(entry: LoadoutRegistry.Entry) -> LoadoutSource: return LoadoutSource.create(entry, http)
+	_register_settings()
+	var settings := EditorInterface.get_editor_settings()
+	var token := func() -> String: return str(settings.get_setting(TOKEN_SETTING)) if settings.has_setting(TOKEN_SETTING) else ""
+	var factory := func(entry: LoadoutRegistry.Entry) -> LoadoutSource: return LoadoutSource.create(entry, http, token)
 	_manager = LoadoutManager.new(installer, registry_path, LoadoutLockfile.DEFAULT_PATH, factory, checker)
 	_dock = Dock.new()
 	_dock.manager = _manager
+	var godot_version := "%d.%d" % [Engine.get_version_info()["major"], Engine.get_version_info()["minor"]]
+	_dock.assetlib_search = func(query: String) -> Dictionary:
+		return await LoadoutAssetlibSource.search(http, query, godot_version)
 	add_control_to_dock(DOCK_SLOT_RIGHT_UL, _dock)
 
 	var smoke_mode := _cmdline_value(SMOKE_ARG_PREFIX)
@@ -80,6 +88,14 @@ func _startup_sync() -> void:
 		Log.write("Updates available: %s" % ", ".join(names))
 		EditorInterface.get_editor_toaster().push_toast("Loadout: updates available (%d)" % updates.size(),
 				EditorToaster.SEVERITY_INFO, "%s\nUpdate them in the Loadout dock." % ", ".join(names))
+
+
+func _register_settings() -> void:
+	var settings := EditorInterface.get_editor_settings()
+	if not settings.has_setting(TOKEN_SETTING):
+		settings.set_setting(TOKEN_SETTING, "")
+	settings.set_initial_value(TOKEN_SETTING, "", false)
+	settings.add_property_info({ "name": TOKEN_SETTING, "type": TYPE_STRING, "hint": PROPERTY_HINT_PASSWORD })
 
 
 func _registry_path() -> String:

@@ -1,17 +1,27 @@
 @tool
 extends ConfirmationDialog
 
-## "Add plugin to registry" for a GitHub repository (Releases) or a local plugin folder
-## (Asset Library comes in F3). Emits the raw registry entry; LoadoutManager validates and saves it.
+## "Add plugin to registry" for a GitHub repository (Releases), an Asset Library asset (search)
+## or a local plugin folder. Emits the raw registry entry; LoadoutManager validates and saves it.
 
 signal entry_submitted(data: Dictionary)
 
 const SOURCE_GITHUB := 0
 const SOURCE_LOCAL := 1
+const SOURCE_ASSETLIB := 2
+
+## func(query: String) -> Dictionary (LoadoutAssetlibSource.search), set by the dock.
+var assetlib_search: Callable
 
 var _source_option: OptionButton
 var _github_box: VBoxContainer
 var _local_box: VBoxContainer
+var _assetlib_box: VBoxContainer
+var _query_edit: LineEdit
+var _search_button: Button
+var _results: ItemList
+var _search_status: Label
+var _asset_id := ""
 var _repo_edit: LineEdit
 var _auto_names := true
 var _setting_names := false
@@ -40,6 +50,7 @@ func _init() -> void:
 	source_row.add_child(_caption("Source"))
 	_source_option = OptionButton.new()
 	_source_option.add_item("GitHub Releases", SOURCE_GITHUB)
+	_source_option.add_item("Asset Library", SOURCE_ASSETLIB)
 	_source_option.add_item("Local folder", SOURCE_LOCAL)
 	_source_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_source_option.item_selected.connect(func(_index: int) -> void: _on_source_changed())
@@ -56,6 +67,28 @@ func _init() -> void:
 	github_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	github_note.custom_minimum_size.x = width
 	_github_box.add_child(github_note)
+
+	_assetlib_box = VBoxContainer.new()
+	box.add_child(_assetlib_box)
+	var search_row := HBoxContainer.new()
+	_assetlib_box.add_child(search_row)
+	_query_edit = LineEdit.new()
+	_query_edit.placeholder_text = "Search the Asset Library"
+	_query_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_query_edit.text_submitted.connect(func(_text: String) -> void: _search())
+	search_row.add_child(_query_edit)
+	_search_button = Button.new()
+	_search_button.text = "Search"
+	_search_button.pressed.connect(_search)
+	search_row.add_child(_search_button)
+	_results = ItemList.new()
+	_results.custom_minimum_size = Vector2(0, roundi(160 * EditorInterface.get_editor_scale()))
+	_results.item_selected.connect(_on_result_selected)
+	_assetlib_box.add_child(_results)
+	_search_status = _caption("Results are filtered to your Godot version. The Asset Library only offers the current version of an asset.")
+	_search_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_search_status.custom_minimum_size.x = width
+	_assetlib_box.add_child(_search_status)
 
 	_local_box = VBoxContainer.new()
 	box.add_child(_local_box)
@@ -100,7 +133,7 @@ func _init() -> void:
 	_auto_check.button_pressed = true
 	box.add_child(_auto_check)
 
-	var note := _caption("The registry applies to all projects on this computer. The Asset Library comes in a later version.")
+	var note := _caption("The registry applies to all projects on this computer.")
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	note.custom_minimum_size.x = width
 	box.add_child(note)
@@ -119,6 +152,9 @@ func open() -> void:
 	_auto_names = true
 	_repo_edit.text = ""
 	_path_edit.text = ""
+	_query_edit.text = ""
+	_results.clear()
+	_asset_id = ""
 	_id_edit.text = ""
 	_folder_edit.text = ""
 	_range_edit.text = "*"
@@ -129,13 +165,17 @@ func open() -> void:
 
 
 func _on_source_changed() -> void:
-	var github := _is_github()
-	_github_box.visible = github
-	_local_box.visible = not github
-	if github:
-		_on_repo_changed()
-	else:
-		_update_from_path()
+	var selected := _source_option.get_selected_id()
+	_github_box.visible = selected == SOURCE_GITHUB
+	_assetlib_box.visible = selected == SOURCE_ASSETLIB
+	_local_box.visible = selected == SOURCE_LOCAL
+	match selected:
+		SOURCE_GITHUB:
+			_on_repo_changed()
+		SOURCE_LOCAL:
+			_update_from_path()
+		_:
+			_validate()
 	reset_size()
 
 
@@ -163,6 +203,38 @@ func _set_names(name: String) -> void:
 
 func _is_github() -> bool:
 	return _source_option.get_selected_id() == SOURCE_GITHUB
+
+
+func _search() -> void:
+	if not assetlib_search.is_valid():
+		_search_status.text = "Search is not available."
+		return
+	_search_button.disabled = true
+	_search_status.text = "Searching…"
+	_results.clear()
+	_asset_id = ""
+	var result: Dictionary = await assetlib_search.call(_query_edit.text)
+	_search_button.disabled = false
+	if not result["ok"]:
+		_search_status.text = result["error"]
+		_validate()
+		return
+	for asset: Dictionary in result["results"]:
+		var index := _results.add_item("%s  ·  %s  ·  v%s  (Godot %s)" % [asset["title"], asset["author"], asset["version_string"], asset["godot_version"]])
+		_results.set_item_metadata(index, asset)
+	_search_status.text = "Found: %d. Select a plugin." % _results.item_count if _results.item_count > 0 else "Nothing found."
+	_validate()
+
+
+func _on_result_selected(index: int) -> void:
+	var asset: Dictionary = _results.get_item_metadata(index)
+	_asset_id = asset["asset_id"]
+	if _auto_names:
+		# "Debug Draw 3D" -> "debug_draw_3d"; check it matches the folder inside the package.
+		var name := RegEx.create_from_string("[^a-z0-9]+").sub(str(asset["title"]).to_lower(), "_", true)
+		_set_names(name.trim_prefix("_").trim_suffix("_"))
+	_search_status.text = "Asset #%s. The folder below must match the plugin's folder in the package (addons/…)." % _asset_id
+	_validate()
 
 
 func _on_browse_pressed() -> void:
@@ -204,7 +276,14 @@ func _plugin_dir(path: String) -> String:
 
 
 func _validate() -> void:
-	var has_source := _repo_edit.text.strip_edges() != "" if _is_github() else _plugin_dir(_path_edit.text.strip_edges()) != ""
+	var has_source := false
+	match _source_option.get_selected_id():
+		SOURCE_GITHUB:
+			has_source = _repo_edit.text.strip_edges() != ""
+		SOURCE_ASSETLIB:
+			has_source = _asset_id != ""
+		SOURCE_LOCAL:
+			has_source = _plugin_dir(_path_edit.text.strip_edges()) != ""
 	var parsed := LoadoutRegistry.parse_entry(_entry_data())
 	_error_label.text = parsed["error"] if has_source and not parsed["ok"] else ""
 	_error_label.visible = _error_label.text != ""
@@ -215,11 +294,19 @@ func _entry_data() -> Dictionary:
 	return {
 		"id": _id_edit.text.strip_edges(),
 		"folder": _folder_edit.text.strip_edges(),
-		"source": { "type": LoadoutRegistry.SOURCE_GITHUB, "repo": _repo_edit.text.strip_edges() } if _is_github()
-				else { "type": LoadoutRegistry.SOURCE_LOCAL, "path": _path_edit.text.strip_edges() },
+		"source": _source_data(),
 		"range": _range_edit.text.strip_edges(),
 		"auto_install": _auto_check.button_pressed,
 	}
+
+
+func _source_data() -> Dictionary:
+	match _source_option.get_selected_id():
+		SOURCE_GITHUB:
+			return { "type": LoadoutRegistry.SOURCE_GITHUB, "repo": _repo_edit.text.strip_edges() }
+		SOURCE_ASSETLIB:
+			return { "type": LoadoutRegistry.SOURCE_ASSETLIB, "asset_id": _asset_id }
+	return { "type": LoadoutRegistry.SOURCE_LOCAL, "path": _path_edit.text.strip_edges() }
 
 
 func _on_confirmed() -> void:
