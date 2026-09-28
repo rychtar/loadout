@@ -159,3 +159,33 @@ func test_describe_and_cache_key() -> void:
 	check_eq(source.describe(), "GitHub · owner/fake-a", "describe")
 	check_eq(source.cache_key(), "github:owner/fake-a", "cache key")
 	check(source.is_remote(), "remote")
+
+
+func test_token_only_for_the_api() -> void:
+	_setup()
+	var secret := "ghp_test_not_a_real_token"
+	source = GithubSource.new("owner/fake-a", "fake_a", http, func() -> String: return secret)
+	http.respond_json(RELEASES_URL, [_release("v1.1.0", { "assets": [{ "name": "fake_a.zip", "browser_download_url": ASSET_URL }] })])
+	source.releases.assign((await _list())["releases"])
+	check_eq(http.header_of(0, "Authorization"), "Bearer " + secret, "token sent to api.github.com")
+	http.responses[ASSET_URL] = { "code": 500, "body": "" }
+	await source.fetch("1.1.0", temp_dir("github_token_fetch").path_join("staged"))
+	check_eq(http.header_of(1, "Authorization"), "", "never sent with downloads (redirects leave GitHub)")
+
+
+func test_no_token_no_header() -> void:
+	_setup()
+	http.respond_json(RELEASES_URL, [])
+	await _list()
+	check_eq(http.header_of(0, "Authorization"), "", "no header without a token")
+
+
+func test_bad_token() -> void:
+	_setup()
+	var secret := "ghp_wrong"
+	source = GithubSource.new("owner/fake-a", "fake_a", http, func() -> String: return secret)
+	http.responses[RELEASES_URL] = { "code": 401, "body": "{}" }
+	var result := await _list()
+	check(not result["ok"], "fails")
+	check(str(result["error"]).contains("token"), "explains: %s" % result["error"])
+	check(not str(result["error"]).contains(secret), "token never in messages")

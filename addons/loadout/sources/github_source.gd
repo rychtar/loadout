@@ -5,7 +5,8 @@ extends LoadoutSource
 ## Plugin published as GitHub Releases. Versions come from release tags (v1.2.3, 1.2.3, name-1.2.3),
 ## the package is the release's zip asset (preferably named after the plugin folder) or the
 ## source zip of the tag. Releases are listed with an ETag, a 304 answer does not count against
-## the 60 requests/hour limit.
+## the 60 requests/hour limit. An optional token (Editor Settings) raises the limit; it is sent
+## only to api.github.com when listing releases, never with downloads (they redirect to other hosts).
 
 const Zip := preload("../util/zip.gd")
 const Fs := preload("../util/fs.gd")
@@ -19,12 +20,15 @@ const _TAG_VERSION_PATTERN := "(\\d+(?:\\.\\d+){0,2}(?:-[0-9A-Za-z-]+(?:\\.[0-9A
 var repo: String
 var folder: String
 var _http: LoadoutHttp
+var _token_provider: Callable
 
 
-func _init(repository: String, plugin_folder: String, http: LoadoutHttp) -> void:
+## token_provider: func() -> String, read for every request so a changed setting applies at once.
+func _init(repository: String, plugin_folder: String, http: LoadoutHttp, token_provider: Callable = Callable()) -> void:
 	repo = repository
 	folder = plugin_folder
 	_http = http
+	_token_provider = token_provider
 
 
 func describe() -> String:
@@ -95,7 +99,7 @@ func fetch(version: String, dest_dir: String) -> Dictionary:
 	if not extracted["ok"]:
 		Fs.remove_dir(dest_dir)
 		return { "ok": false, "error": extracted["error"], "path": "" }
-	return { "ok": true, "error": "", "path": dest_dir }
+	return { "ok": true, "error": "", "path": dest_dir, "warning": folder_warning(extracted["source_folder"], folder) }
 
 
 func _parse_release(item: Dictionary) -> Dictionary:
@@ -134,11 +138,15 @@ func _package_url(item: Dictionary) -> String:
 
 
 func _api_headers() -> PackedStringArray:
-	return PackedStringArray([
+	var headers := PackedStringArray([
 		"User-Agent: %s" % USER_AGENT,
 		"Accept: application/vnd.github+json",
 		"X-GitHub-Api-Version: 2022-11-28",
 	])
+	var token := str(_token_provider.call()).strip_edges() if _token_provider.is_valid() else ""
+	if token != "":
+		headers.append("Authorization: Bearer %s" % token)
+	return headers
 
 
 func _status_error(code: int, headers: Dictionary) -> String:
@@ -147,6 +155,8 @@ func _status_error(code: int, headers: Dictionary) -> String:
 	match code:
 		404:
 			return "Repository %s or release not found." % repo
-		401, 403:
+		401:
+			return "GitHub rejected the token from Editor Settings (loadout/github_token), check it."
+		403:
 			return "GitHub denied access to %s (code %d)." % [repo, code]
 	return "GitHub answered with code %d." % code

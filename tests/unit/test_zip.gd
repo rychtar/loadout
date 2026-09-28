@@ -39,7 +39,9 @@ func test_plugin_files_at_root() -> void:
 
 func test_folder_name_differs_but_single_plugin() -> void:
 	var result := _extract("renamed", "addons/other_name/", "fake_a")
-	check(result["ok"], "only one plugin in the package, folder name does not matter")
+	check(result["ok"], "only one plugin in the package")
+	check_eq(result["source_folder"], "other_name", "package folder reported for a warning")
+	check_eq(_extract("same_name", "addons/fake_a/")["source_folder"], "fake_a", "same name")
 
 
 func test_picks_plugin_by_folder_among_several() -> void:

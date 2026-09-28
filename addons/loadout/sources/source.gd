@@ -66,17 +66,30 @@ func get_plugin_name() -> String:
 
 
 ## Puts the plugin folder content of version into dest_dir (created by the source).
-## Returns { "ok": bool, "error": String, "path": String } where path holds plugin.cfg.
+## Returns { "ok": bool, "error": String, "path": String, "warning": String (optional) } where
+## path holds plugin.cfg.
 func fetch(_version: String, _dest_dir: String) -> Dictionary:
 	return { "ok": false, "error": "The source cannot download.", "path": "" }
 
 
-## Source for a registry entry, null for types not supported yet. Remote sources need http.
-static func create(entry: LoadoutRegistry.Entry, http: LoadoutHttp = null) -> LoadoutSource:
+## Warning when the package keeps the plugin in another folder than the registry entry: plugins
+## with hard-coded res://addons/<name>/ paths break when installed under a different name.
+static func folder_warning(package_folder: String, registry_folder: String) -> String:
+	if package_folder == "" or package_folder == registry_folder:
+		return ""
+	return "The package keeps the plugin in folder '%s', the registry says '%s'. If the plugin uses fixed paths like res://addons/%s/, fix the folder in the registry." % [package_folder, registry_folder, package_folder]
+
+
+## Source for a registry entry, null for types not supported yet. Remote sources need http;
+## github_token: func() -> String (optional).
+static func create(entry: LoadoutRegistry.Entry, http: LoadoutHttp = null, github_token: Callable = Callable()) -> LoadoutSource:
 	match entry.source.get("type"):
 		LoadoutRegistry.SOURCE_LOCAL:
 			return LoadoutLocalSource.new(entry.source["path"])
 		LoadoutRegistry.SOURCE_GITHUB:
 			if http != null:
-				return LoadoutGithubSource.new(entry.source["repo"], entry.folder, http)
+				return LoadoutGithubSource.new(entry.source["repo"], entry.folder, http, github_token)
+		LoadoutRegistry.SOURCE_ASSETLIB:
+			if http != null:
+				return LoadoutAssetlibSource.new(entry.source["asset_id"], entry.folder, http)
 	return null

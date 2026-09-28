@@ -11,6 +11,7 @@ const SCHEMA := 1
 const FILE_NAME := "loadout_registry.json"
 const SOURCE_LOCAL := "local"
 const SOURCE_GITHUB := "github"
+const SOURCE_ASSETLIB := "assetlib"
 const _NAME_PATTERN := "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
 const _REPO_PATTERN := "^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$"
 const _GITHUB_URL_PREFIX := "https://github.com/"
@@ -19,7 +20,8 @@ const _GITHUB_URL_PREFIX := "https://github.com/"
 class Entry:
 	var id: String
 	var folder: String
-	## { "type": "local", "path": String } or { "type": "github", "repo": "owner/name" }
+	## { "type": "local", "path": String }, { "type": "github", "repo": "owner/name" }
+	## or { "type": "assetlib", "asset_id": "1234" }
 	var source: Dictionary
 	var version_range: String = "*"
 	var auto_install: bool = true
@@ -162,6 +164,15 @@ static func _parse_source(data: Variant) -> Dictionary:
 			if normalized == "":
 				return { "ok": false, "error": "invalid GitHub repository %s (expected owner/name)" % repo }
 			return { "ok": true, "source": { "type": SOURCE_GITHUB, "repo": normalized } }
+		SOURCE_ASSETLIB:
+			var asset_id: Variant = data.get("asset_id", "")
+			if typeof(asset_id) == TYPE_FLOAT and is_equal_approx(asset_id, roundf(asset_id)):
+				asset_id = str(int(asset_id))
+			if typeof(asset_id) == TYPE_INT:
+				asset_id = str(asset_id)
+			if typeof(asset_id) != TYPE_STRING or not asset_id.is_valid_int() or asset_id.to_int() <= 0:
+				return { "ok": false, "error": "invalid Asset Library asset id %s" % var_to_str(asset_id) }
+			return { "ok": true, "source": { "type": SOURCE_ASSETLIB, "asset_id": asset_id } }
 	return { "ok": false, "error": "unknown source type %s" % var_to_str(data.get("type")) }
 
 

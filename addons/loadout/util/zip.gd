@@ -6,7 +6,8 @@ extends RefCounted
 ## and zips of the plugin folder itself. Entries escaping the target (../) are refused.
 
 
-## Returns { "ok": bool, "error": String }. dest_dir receives the plugin folder content.
+## Returns { "ok": bool, "error": String, "source_folder": String }. dest_dir receives the plugin
+## folder content; source_folder is the folder name the package uses ("" when the zip root is it).
 static func extract_plugin(zip_path: String, folder: String, dest_dir: String) -> Dictionary:
 	var reader := ZIPReader.new()
 	if reader.open(zip_path) != OK:
@@ -41,7 +42,7 @@ static func extract_plugin(zip_path: String, folder: String, dest_dir: String) -
 	reader.close()
 	if err != OK:
 		return { "ok": false, "error": "Extracting failed: %s" % error_string(err) }
-	return { "ok": true, "error": "" }
+	return { "ok": true, "error": "", "source_folder": root.trim_suffix("/").get_file() }
 
 
 ## Folder prefix inside the zip ("" = zip root) holding the plugin.cfg of the wanted plugin.

@@ -156,3 +156,15 @@ func test_unknown_schema_file_is_not_overwritten() -> void:
 	check(not FileAccess.file_exists(path + ".bak"), "valid JSON is not backed up")
 	var empty: Registry = Registry.from_dict({ "schema": 1, "plugins": [] })["registry"]
 	check(empty.save_file(path) != OK, "save refuses to overwrite unknown schema")
+
+
+func test_assetlib_sources() -> void:
+	var registry := _from_entries([
+		_entry({ "id": "a", "folder": "a", "source": { "type": "assetlib", "asset_id": "1586" } }),
+		_entry({ "id": "b", "folder": "b", "source": { "type": "assetlib", "asset_id": 1709 } }),
+		_entry({ "id": "c", "folder": "c", "source": { "type": "assetlib", "asset_id": "abc" } }),
+		_entry({ "id": "d", "folder": "d", "source": { "type": "assetlib" } }),
+	])
+	check_eq(registry.get_entry("a").source, { "type": "assetlib", "asset_id": "1586" }, "string id")
+	check(registry.get_entry("b") != null and registry.get_entry("b").source["asset_id"] == "1709", "number id from JSON becomes a string")
+	check(registry.get_entry("c") == null and registry.get_entry("d") == null, "invalid ids skipped")
