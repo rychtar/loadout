@@ -64,6 +64,9 @@ var errors: PackedStringArray = []
 ## Non-fatal problems (skipped registry or lock entries).
 var warnings: PackedStringArray = []
 var states: Array[PluginState] = []
+## Plugins in the project's addons folder that the registry does not know (Loadout itself excluded):
+## [{ "folder": String, "name": String, "version": String }], sorted by name.
+var unregistered: Array[Dictionary] = []
 ## True while an install or update runs; other actions are refused meanwhile.
 var busy := false
 
@@ -103,6 +106,7 @@ func refresh(check_updates: bool = false) -> void:
 	checker.save_cache()
 	warnings.append_array(checker.warnings)
 	states = new_states
+	unregistered.assign(_scan_unregistered() if _registry_ok else [])
 	states_changed.emit()
 
 
@@ -287,7 +291,9 @@ func import_registry(path: String) -> Dictionary:
 
 
 ## Adds a raw entry to the global registry and saves it. Returns "" or an error message.
-func add_registry_entry(data: Dictionary) -> String:
+## take_over: the plugin is already in this project's addons folder; its current files are
+## recorded in the lock as installed, nothing is copied or toggled.
+func add_registry_entry(data: Dictionary, take_over: bool = false) -> String:
 	if not _registry_ok:
 		return "The registry cannot be read, nothing changed."
 	var error := registry.add_entry(data)
@@ -297,6 +303,11 @@ func add_registry_entry(data: Dictionary) -> String:
 	if err != OK:
 		registry.remove_entry(str(data.get("id", "")))
 		return "Saving the registry failed: %s" % error_string(err)
+	var entry := registry.get_entry(str(data.get("id", "")))
+	var dir := installer.target_dir(entry)
+	if take_over and _lock_ok and DirAccess.dir_exists_absolute(dir) and lockfile.get_entry(entry.id) == null:
+		lockfile.set_installed(entry.id, installer.installed_version(entry), Fs.hash_dir(dir), _today())
+		_save_lock()
 	await refresh()
 	return ""
 
@@ -423,6 +434,26 @@ func _self_update(state: PluginState, source: LoadoutSource, force: bool) -> Dic
 		restart_required.emit()
 	busy = false
 	return result
+
+
+func _scan_unregistered() -> Array[Dictionary]:
+	var known := {}
+	for entry in registry.entries:
+		known[entry.folder.to_lower()] = true
+	var found: Array[Dictionary] = []
+	for folder in DirAccess.get_directories_at(installer.addons_dir):
+		if folder == SELF_FOLDER or known.has(folder.to_lower()):
+			continue
+		var cfg := ConfigFile.new()
+		if cfg.load(installer.addons_dir.path_join(folder).path_join("plugin.cfg")) != OK:
+			continue
+		found.append({
+			"folder": folder,
+			"name": str(cfg.get_value("plugin", "name", folder)),
+			"version": str(cfg.get_value("plugin", "version", "")),
+		})
+	found.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a["name"].naturalnocasecmp_to(b["name"]) < 0)
+	return found
 
 
 func _orphan_state(id: String) -> PluginState:

@@ -4,7 +4,8 @@ extends ConfirmationDialog
 ## "Add plugin to registry" for a GitHub repository (Releases), a Godot Asset Store asset (search)
 ## or a local plugin folder. Emits the raw registry entry; LoadoutManager validates and saves it.
 
-signal entry_submitted(data: Dictionary)
+## take_over: the plugin is already in the project and Loadout should adopt its current files.
+signal entry_submitted(data: Dictionary, take_over: bool)
 
 const SOURCE_GITHUB := 0
 const SOURCE_LOCAL := 1
@@ -23,6 +24,8 @@ var _results: ItemList
 var _search_status: Label
 ## "publisher/slug" of the selected Asset Store result.
 var _store_asset := ""
+var _existing_label: Label
+var _take_over := false
 var _repo_edit: LineEdit
 var _auto_names := true
 var _setting_names := false
@@ -46,6 +49,10 @@ func _init() -> void:
 	box.add_theme_constant_override("separation", 8)
 	add_child(box)
 
+	_existing_label = _caption("")
+	_existing_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_existing_label.custom_minimum_size.x = width
+	box.add_child(_existing_label)
 	var source_row := HBoxContainer.new()
 	box.add_child(source_row)
 	source_row.add_child(_caption("Source"))
@@ -150,6 +157,10 @@ func _init() -> void:
 
 
 func open() -> void:
+	title = "Add a plugin to the global registry"
+	_take_over = false
+	_existing_label.visible = false
+	_folder_edit.editable = true
 	_auto_names = true
 	_repo_edit.text = ""
 	_path_edit.text = ""
@@ -165,6 +176,22 @@ func open() -> void:
 	popup_centered()
 
 
+## Opens the dialog for a plugin already in the project's addons folder: its folder is fixed,
+## the Asset Store is searched for its name and Loadout takes over the current files.
+func open_existing(info: Dictionary) -> void:
+	open()
+	title = "Add an existing plugin to the registry"
+	_take_over = true
+	_auto_names = false
+	_set_names(info["folder"])
+	_folder_edit.editable = false
+	_existing_label.text = "%s %s is already in addons/%s. Loadout keeps the current files; choose where updates come from." % [info["name"], info["version"], info["folder"]]
+	_existing_label.visible = true
+	_source_option.select(_source_option.get_item_index(SOURCE_STORE))
+	_on_source_changed()
+	_query_edit.text = info["name"]
+	reset_size()
+	_search()
 func _on_source_changed() -> void:
 	var selected := _source_option.get_selected_id()
 	_github_box.visible = selected == SOURCE_GITHUB

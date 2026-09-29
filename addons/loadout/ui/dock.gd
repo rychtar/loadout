@@ -37,6 +37,8 @@ var _problems_label: Label
 var _install_missing_button: Button
 var _update_all_button: Button
 var _tree: Tree
+var _unregistered_box: VBoxContainer
+var _unregistered_rows: VBoxContainer
 var _detail_title: Label
 var _detail_message: Label
 var _detail_grid: GridContainer
@@ -131,6 +133,17 @@ func _build() -> void:
 	_tree.item_selected.connect(_on_item_selected)
 	add_child(_tree)
 
+	_unregistered_box = VBoxContainer.new()
+	add_child(_unregistered_box)
+	var unregistered_title := Label.new()
+	unregistered_title.text = "Project addons not in the registry"
+	unregistered_title.tooltip_text = "Loadout does not manage these plugins. Add them to the registry to keep them in sync across projects."
+	unregistered_title.mouse_filter = Control.MOUSE_FILTER_PASS
+	unregistered_title.add_theme_font_override("font", _theme_font("bold"))
+	_unregistered_box.add_child(unregistered_title)
+	_unregistered_rows = VBoxContainer.new()
+	_unregistered_box.add_child(_unregistered_rows)
+
 	add_child(HSeparator.new())
 	_detail_title = Label.new()
 	_detail_title.add_theme_font_override("font", _theme_font("bold"))
@@ -175,8 +188,8 @@ func _build() -> void:
 	base.add_child(_import_dialog)
 	_registry_dialog = RegistryDialog.new()
 	_registry_dialog.store_search = store_search
-	_registry_dialog.entry_submitted.connect(func(data: Dictionary) -> void:
-		_run(func() -> String: return await manager.add_registry_entry(data)))
+	_registry_dialog.entry_submitted.connect(func(data: Dictionary, take_over: bool) -> void:
+		_run(func() -> String: return await manager.add_registry_entry(data, take_over)))
 	base.add_child(_registry_dialog)
 
 
@@ -194,6 +207,7 @@ func _rebuild() -> void:
 		item.set_text(2, _version_text(state))
 		if state.id == _selected_id:
 			item.select(0)
+	_rebuild_unregistered()
 	_info_label.text = "Registry: %d · %s" % [manager.registry.entries.size() if manager.registry != null else 0, manager.lock_path.get_file()]
 	var problems := manager.errors.duplicate()
 	problems.append_array(manager.warnings)
@@ -210,6 +224,28 @@ func _rebuild() -> void:
 	_update_all_button.text = "Update all (%d)…" % updates.size()
 	_update_all_button.visible = updates.size() > 1
 	_update_detail()
+
+
+func _rebuild_unregistered() -> void:
+	for child in _unregistered_rows.get_children():
+		_unregistered_rows.remove_child(child)
+		child.queue_free()
+	for info: Dictionary in manager.unregistered:
+		var row := HBoxContainer.new()
+		var label := Label.new()
+		label.text = "%s %s" % [info["name"], info["version"]]
+		label.tooltip_text = "addons/%s" % info["folder"]
+		label.mouse_filter = Control.MOUSE_FILTER_PASS
+		label.clip_text = true
+		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(label)
+		var button := Button.new()
+		button.text = "Add to registry…"
+		button.disabled = _busy
+		button.pressed.connect(func() -> void: _registry_dialog.open_existing(info))
+		row.add_child(button)
+		_unregistered_rows.add_child(row)
+	_unregistered_box.visible = not manager.unregistered.is_empty()
 
 
 func _update_detail() -> void:

@@ -456,3 +456,54 @@ func test_import_invalid_file() -> void:
 	write_text(path, "{ \"schema\": 1, \"plugins\": {} }")
 	check(not (await manager.import_registry(path))["ok"], "not a registry")
 	check(not (await manager.import_registry(root.path_join("missing.json")))["ok"], "missing file")
+
+
+func _unregistered_folders() -> PackedStringArray:
+	var folders: PackedStringArray = []
+	for info: Dictionary in manager.unregistered:
+		folders.append(info["folder"])
+	return folders
+
+
+func test_lists_project_addons_not_in_the_registry() -> void:
+	_setup("unregistered", [_local("fake_a", "1.0.0")])
+	Fs.copy_dir(FIXTURES.path_join("1.0.0"), addons.path_join("existing"))
+	Fs.copy_dir(_gam_package("0.0.1"), addons.path_join("loadout"))
+	DirAccess.make_dir_recursive_absolute(addons.path_join("no_plugin_cfg"))
+	await manager.refresh()
+	check_eq(_unregistered_folders(), PackedStringArray(["existing"]), "only plugins Loadout does not know")
+	var info: Dictionary = manager.unregistered[0]
+	check_eq([info["name"], info["version"]], ["Fake A", "1.0.0"], "name and version from plugin.cfg")
+	await manager.install_missing()
+	check_eq(_unregistered_folders(), PackedStringArray(["existing"]), "registered plugins never listed")
+
+
+func test_add_existing_addon_takes_it_over() -> void:
+	_setup("take_over", [])
+	Fs.copy_dir(FIXTURES.path_join("1.0.0"), addons.path_join("fake_a"))
+	await manager.refresh()
+	check_eq(_unregistered_folders(), PackedStringArray(["fake_a"]), "listed before")
+	check_eq(await manager.add_registry_entry(_local("fake_a", "1.0.0"), true), "", "added")
+	check_eq(_status("fake_a"), Manager.Status.OK, "managed right away")
+	var entry := _saved_lock().get_entry("fake_a")
+	check(entry != null and entry.version == "1.0.0", "version locked")
+	check(entry != null and entry.folder_hash == Fs.hash_dir(addons.path_join("fake_a")), "current files locked")
+	check(manager.unregistered.is_empty(), "no longer listed")
+	check(editor.calls.is_empty(), "files untouched, plugin not toggled")
+
+
+func test_take_over_older_copy_offers_update() -> void:
+	_setup("take_over_old", [])
+	Fs.copy_dir(FIXTURES.path_join("1.0.0"), addons.path_join("fake_a"))
+	_fake("fake_a", ["1.0.0", "1.1.0"])
+	await manager.refresh()
+	check_eq(await manager.add_registry_entry(_local("fake_a", "1.0.0"), true), "", "added")
+	check_eq(_status("fake_a"), Manager.Status.UPDATE, "the source has a newer version")
+
+
+func test_take_over_without_folder_just_adds() -> void:
+	_setup("take_over_missing", [])
+	await manager.refresh()
+	check_eq(await manager.add_registry_entry(_local("fake_a", "1.0.0"), true), "", "added")
+	check_eq(_status("fake_a"), Manager.Status.MISSING, "nothing to take over")
+	check(not FileAccess.file_exists(_lock_path()), "no lock entry written")
