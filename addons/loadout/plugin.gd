@@ -33,13 +33,13 @@ func _enter_tree() -> void:
 	_register_settings()
 	var settings := EditorInterface.get_editor_settings()
 	var token := func() -> String: return str(settings.get_setting(TOKEN_SETTING)) if settings.has_setting(TOKEN_SETTING) else ""
-	var factory := func(entry: LoadoutRegistry.Entry) -> LoadoutSource: return LoadoutSource.create(entry, http, token)
+	var godot_version := "%d.%d" % [Engine.get_version_info()["major"], Engine.get_version_info()["minor"]]
+	var factory := func(entry: LoadoutRegistry.Entry) -> LoadoutSource: return LoadoutSource.create(entry, http, token, godot_version)
 	_manager = LoadoutManager.new(installer, registry_path, LoadoutLockfile.DEFAULT_PATH, factory, checker)
 	_dock = Dock.new()
 	_dock.manager = _manager
-	var godot_version := "%d.%d" % [Engine.get_version_info()["major"], Engine.get_version_info()["minor"]]
-	_dock.assetlib_search = func(query: String) -> Dictionary:
-		return await LoadoutAssetlibSource.search(http, query, godot_version)
+	_dock.store_search = func(query: String) -> Dictionary:
+		return await LoadoutStoreSource.search(http, query, godot_version)
 	add_control_to_dock(DOCK_SLOT_RIGHT_UL, _dock)
 
 	var smoke_mode := _cmdline_value(SMOKE_ARG_PREFIX)

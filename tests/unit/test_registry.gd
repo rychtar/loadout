@@ -168,3 +168,15 @@ func test_assetlib_sources() -> void:
 	check_eq(registry.get_entry("a").source, { "type": "assetlib", "asset_id": "1586" }, "string id")
 	check(registry.get_entry("b") != null and registry.get_entry("b").source["asset_id"] == "1709", "number id from JSON becomes a string")
 	check(registry.get_entry("c") == null and registry.get_entry("d") == null, "invalid ids skipped")
+
+
+func test_store_sources() -> void:
+	var registry := _from_entries([
+		_entry({ "id": "a", "folder": "a", "source": { "type": "store", "asset": "rumys/gdscript-templates" } }),
+		_entry({ "id": "b", "folder": "b", "source": { "type": "store", "asset": "https://store.godotengine.org/asset/rumys/gdscript-templates/" } }),
+		_entry({ "id": "c", "folder": "c", "source": { "type": "store", "asset": "no-slash" } }),
+		_entry({ "id": "d", "folder": "d", "source": { "type": "store", "asset": "http://store.godotengine.org/asset/a/b/" } }),
+	])
+	check_eq(registry.get_entry("a").source, { "type": "store", "asset": "rumys/gdscript-templates" }, "publisher/slug")
+	check(registry.get_entry("b") != null and registry.get_entry("b").source["asset"] == "rumys/gdscript-templates", "store URL normalized")
+	check(registry.get_entry("c") == null and registry.get_entry("d") == null, "invalid ones skipped")

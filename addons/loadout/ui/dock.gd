@@ -27,8 +27,8 @@ const MENU_IMPORT := 1
 const MENU_TOKEN := 2
 
 var manager: LoadoutManager
-## func(query: String) -> Dictionary (LoadoutAssetlibSource.search), set by plugin.gd.
-var assetlib_search: Callable
+## func(query: String) -> Dictionary (LoadoutStoreSource.search), set by plugin.gd.
+var store_search: Callable
 ## Restart the editor right after Loadout updated itself (smoke tests switch it off).
 var auto_restart := true
 
@@ -174,7 +174,7 @@ func _build() -> void:
 	_import_dialog.file_selected.connect(func(path: String) -> void: _run(_import_registry.bind(path)))
 	base.add_child(_import_dialog)
 	_registry_dialog = RegistryDialog.new()
-	_registry_dialog.assetlib_search = assetlib_search
+	_registry_dialog.store_search = store_search
 	_registry_dialog.entry_submitted.connect(func(data: Dictionary) -> void:
 		_run(func() -> String: return await manager.add_registry_entry(data)))
 	base.add_child(_registry_dialog)

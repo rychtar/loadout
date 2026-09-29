@@ -81,14 +81,18 @@ static func folder_warning(package_folder: String, registry_folder: String) -> S
 
 
 ## Source for a registry entry, null for types not supported yet. Remote sources need http;
-## github_token: func() -> String (optional).
-static func create(entry: LoadoutRegistry.Entry, http: LoadoutHttp = null, github_token: Callable = Callable()) -> LoadoutSource:
+## github_token: func() -> String (optional); godot_version "4.7" limits store releases.
+static func create(entry: LoadoutRegistry.Entry, http: LoadoutHttp = null, github_token: Callable = Callable(),
+		godot_version: String = "") -> LoadoutSource:
 	match entry.source.get("type"):
 		LoadoutRegistry.SOURCE_LOCAL:
 			return LoadoutLocalSource.new(entry.source["path"])
 		LoadoutRegistry.SOURCE_GITHUB:
 			if http != null:
 				return LoadoutGithubSource.new(entry.source["repo"], entry.folder, http, github_token)
+		LoadoutRegistry.SOURCE_STORE:
+			if http != null:
+				return LoadoutStoreSource.new(entry.source["asset"], entry.folder, http, godot_version)
 		LoadoutRegistry.SOURCE_ASSETLIB:
 			if http != null:
 				return LoadoutAssetlibSource.new(entry.source["asset_id"], entry.folder, http)

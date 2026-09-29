@@ -11,7 +11,12 @@ const SCHEMA := 1
 const FILE_NAME := "loadout_registry.json"
 const SOURCE_LOCAL := "local"
 const SOURCE_GITHUB := "github"
+## Legacy Asset Library (godotengine.org/asset-library); existing entries keep working.
 const SOURCE_ASSETLIB := "assetlib"
+## Godot Asset Store (store.godotengine.org), the store of Godot 4.7+.
+const SOURCE_STORE := "store"
+const _STORE_URL_PREFIX := "https://store.godotengine.org/asset/"
+const _STORE_ASSET_PATTERN := "^[a-z0-9][a-z0-9_-]*/[a-z0-9][a-z0-9_.-]*$"
 const _NAME_PATTERN := "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
 const _REPO_PATTERN := "^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$"
 const _GITHUB_URL_PREFIX := "https://github.com/"
@@ -21,7 +26,7 @@ class Entry:
 	var id: String
 	var folder: String
 	## { "type": "local", "path": String }, { "type": "github", "repo": "owner/name" }
-	## or { "type": "assetlib", "asset_id": "1234" }
+	## { "type": "store", "asset": "publisher/slug" } or { "type": "assetlib", "asset_id": "1234" }
 	var source: Dictionary
 	var version_range: String = "*"
 	var auto_install: bool = true
@@ -173,6 +178,16 @@ static func _parse_source(data: Variant) -> Dictionary:
 			if typeof(asset_id) != TYPE_STRING or not asset_id.is_valid_int() or asset_id.to_int() <= 0:
 				return { "ok": false, "error": "invalid Asset Library asset id %s" % var_to_str(asset_id) }
 			return { "ok": true, "source": { "type": SOURCE_ASSETLIB, "asset_id": asset_id } }
+		SOURCE_STORE:
+			var asset: Variant = data.get("asset", "")
+			if typeof(asset) != TYPE_STRING:
+				return { "ok": false, "error": "invalid Asset Store asset" }
+			var text: String = asset.strip_edges()
+			if text.begins_with(_STORE_URL_PREFIX):
+				text = text.trim_prefix(_STORE_URL_PREFIX).trim_suffix("/")
+			if RegEx.create_from_string(_STORE_ASSET_PATTERN).search(text) == null:
+				return { "ok": false, "error": "invalid Asset Store asset %s (expected publisher/slug)" % asset }
+			return { "ok": true, "source": { "type": SOURCE_STORE, "asset": text } }
 	return { "ok": false, "error": "unknown source type %s" % var_to_str(data.get("type")) }
 
 
