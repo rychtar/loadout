@@ -4,8 +4,8 @@ extends LoadoutSource
 
 ## Plugin published as GitHub Releases. Versions come from release tags (v1.2.3, 1.2.3, name-1.2.3),
 ## the package is the release's zip asset (preferably named after the plugin folder) or the
-## source zip of the tag. Releases are listed with an ETag, a 304 answer does not count against
-## the 60 requests/hour limit. An optional token (Editor Settings) raises the limit; it is sent
+## source zip of the tag. Releases are listed with an ETag; with a token a 304 answer does not
+## count against the rate limit (without one it does, the daily check keeps it low). An optional token (Editor Settings) raises the limit; it is sent
 ## only to api.github.com when listing releases, never with downloads (they redirect to other hosts).
 
 const Zip := preload("../util/zip.gd")

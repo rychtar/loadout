@@ -4,8 +4,8 @@ extends RefCounted
 
 ## Decides when remote sources are asked for releases and caches the answers in loadout_cache.json
 ## (editor config dir, not in git). Each remote source is asked at most once a day unless the
-## user forces a check; the ETag of the last answer is sent back so an unchanged list costs
-## nothing. When a source fails, the cached releases are used and a warning goes to the dock.
+## user forces a check; the ETag of the last answer is sent back so an unchanged list is a short
+## 304 answer (free of the GitHub rate limit when a token is set). When a source fails, the cached releases are used and a warning goes to the dock.
 ## Local sources are cheap and read every time.
 
 const JsonStore := preload("../util/json_store.gd")

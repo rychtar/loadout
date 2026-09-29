@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Global Addons Manager: a stack of plugins kept in sync. Same tile as GDScript Templates. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#262b36"/>
+      <stop offset="1" stop-color="#1b1e25"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="230" fill="url(#tile)"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="72">
+    <path d="M232 512 L512 652 L792 512" stroke="#e6e9ef"/>
+    <path d="M232 652 L512 792 L792 652" stroke="#e6e9ef"/>
+    <path d="M512 232 L792 372 L512 512 L232 372 Z" stroke="#478cbf" fill="#478cbf"/>
+  </g>
+</svg>

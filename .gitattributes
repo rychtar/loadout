@@ -4,3 +4,7 @@
 /tests export-ignore
 /tools export-ignore
 /project.godot export-ignore
+/icon.svg export-ignore
+/icon.png export-ignore
+/icon.svg.import export-ignore
+/icon.png.import export-ignore
