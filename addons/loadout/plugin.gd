@@ -50,6 +50,9 @@ func _enter_tree() -> void:
 
 
 func _exit_tree() -> void:
+	var filesystem := EditorInterface.get_resource_filesystem()
+	if filesystem.filesystem_changed.is_connected(_on_filesystem_changed):
+		filesystem.filesystem_changed.disconnect(_on_filesystem_changed)
 	remove_control_from_docks(_dock)
 	_dock.queue_free()
 	_dock = null
@@ -75,6 +78,8 @@ func _startup_sync() -> void:
 	await _manager.refresh()
 	if _manager == null or _dock == null:
 		return
+	# From now on, plugins added to addons/ (e.g. from Godot's asset store) are offered to Loadout.
+	filesystem.filesystem_changed.connect(_on_filesystem_changed)
 	var missing := _manager.missing_ids()
 	if not missing.is_empty():
 		Log.write("Missing in this project: %s" % ", ".join(missing))
@@ -88,6 +93,15 @@ func _startup_sync() -> void:
 		Log.write("Updates available: %s" % ", ".join(names))
 		EditorInterface.get_editor_toaster().push_toast("Loadout: updates available (%d)" % updates.size(),
 				EditorToaster.SEVERITY_INFO, "%s\nUpdate them in the Loadout dock." % ", ".join(names))
+
+
+func _on_filesystem_changed() -> void:
+	if _manager == null or _dock == null:
+		return
+	var fresh := _manager.detect_new_addons()
+	if not fresh.is_empty():
+		Log.write("New plugin in addons/: %s" % ", ".join(PackedStringArray(fresh.map(func(info: Dictionary) -> String: return info["folder"]))))
+		_dock.offer_new_addons(fresh)
 
 
 func _register_settings() -> void:

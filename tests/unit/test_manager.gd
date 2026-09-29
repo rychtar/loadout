@@ -507,3 +507,39 @@ func test_take_over_without_folder_just_adds() -> void:
 	check_eq(await manager.add_registry_entry(_local("fake_a", "1.0.0"), true), "", "added")
 	check_eq(_status("fake_a"), Manager.Status.MISSING, "nothing to take over")
 	check(not FileAccess.file_exists(_lock_path()), "no lock entry written")
+
+
+func _new_folders(found: Array[Dictionary]) -> PackedStringArray:
+	var folders: PackedStringArray = []
+	for info in found:
+		folders.append(info["folder"])
+	return folders
+
+
+func test_detects_addons_added_after_start() -> void:
+	_setup("detect", [_local("fake_a", "1.0.0")])
+	Fs.copy_dir(FIXTURES.path_join("1.0.0"), addons.path_join("before_start"))
+	await manager.refresh()
+	check(manager.detect_new_addons().is_empty(), "plugins present at start are not announced")
+	Fs.copy_dir(FIXTURES.path_join("1.0.0"), addons.path_join("from_store"))
+	check_eq(_new_folders(manager.detect_new_addons()), PackedStringArray(["from_store"]), "new plugin announced")
+	check(manager.detect_new_addons().is_empty(), "announced only once")
+	check_eq(_unregistered_folders(), PackedStringArray(["before_start", "from_store"]), "listed in the dock section")
+
+
+func test_plugins_installed_by_gam_are_not_announced() -> void:
+	_setup("detect_gam", [_local("fake_a", "1.0.0")])
+	await manager.refresh()
+	await manager.install_missing()
+	check(manager.detect_new_addons().is_empty(), "registered plugin installed by Loadout")
+	Fs.copy_dir(_gam_package("0.0.2"), addons.path_join("loadout"))
+	DirAccess.make_dir_recursive_absolute(addons.path_join("not_a_plugin"))
+	check(manager.detect_new_addons().is_empty(), "Loadout itself and folders without plugin.cfg ignored")
+
+
+func test_removed_registry_entry_is_not_announced() -> void:
+	_setup("detect_removed", [_local("fake_a", "1.0.0")])
+	await manager.refresh()
+	await manager.install_missing()
+	await manager.remove_registry_entry("fake_a")
+	check(manager.detect_new_addons().is_empty(), "the user removed it from the registry on purpose")

@@ -82,6 +82,21 @@ func offer_missing(ids: PackedStringArray) -> void:
 			"Install all", _install_missing, "Later")
 
 
+## Called when plugins appear in addons/ outside Loadout (e.g. installed from Godot's asset store):
+## offers to add the first one to the registry, the others stay listed in the dock.
+func offer_new_addons(found: Array[Dictionary]) -> void:
+	var info: Dictionary = found[0]
+	var names := ", ".join(PackedStringArray(found.map(func(item: Dictionary) -> String: return item["name"])))
+	if _confirm.visible or _registry_dialog.visible or _busy:
+		EditorInterface.get_editor_toaster().push_toast("New plugin: %s" % names, EditorToaster.SEVERITY_INFO,
+				"Add it to your global plugins in the Loadout dock.")
+		return
+	var others := "" if found.size() == 1 else "\n\nThe other new plugins are listed in the Loadout dock."
+	_ask("New plugin %s %s found in addons/%s.\n\nAdd it to your global plugins? Loadout then keeps it in sync across your projects and watches for updates.%s"
+			% [info["name"], info["version"], info["folder"], others],
+			"Add to registry…", func() -> void: _registry_dialog.open_existing(info), "Not now")
+
+
 func _build() -> void:
 	var header := HBoxContainer.new()
 	add_child(header)

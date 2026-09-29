@@ -67,6 +67,8 @@ var states: Array[PluginState] = []
 ## Plugins in the project's addons folder that the registry does not know (Loadout itself excluded):
 ## [{ "folder": String, "name": String, "version": String }], sorted by name.
 var unregistered: Array[Dictionary] = []
+## Folders of unregistered plugins already known (present at the last refresh or announced).
+var _seen_addons: Dictionary[String, bool] = {}
 ## True while an install or update runs; other actions are refused meanwhile.
 var busy := false
 
@@ -107,7 +109,26 @@ func refresh(check_updates: bool = false) -> void:
 	warnings.append_array(checker.warnings)
 	states = new_states
 	unregistered.assign(_scan_unregistered() if _registry_ok else [])
+	for info in unregistered:
+		_seen_addons[info["folder"]] = true
 	states_changed.emit()
+
+
+## Plugins that appeared in addons/ since the last check and are not in the registry, e.g.
+## installed from Godot's asset store. Each one is reported once. Reads files only.
+func detect_new_addons() -> Array[Dictionary]:
+	var fresh: Array[Dictionary] = []
+	if not _registry_ok or busy:
+		return fresh
+	var current := _scan_unregistered()
+	for info in current:
+		if not _seen_addons.has(info["folder"]):
+			fresh.append(info)
+			_seen_addons[info["folder"]] = true
+	if current != unregistered:
+		unregistered = current
+		states_changed.emit()
+	return fresh
 
 
 ## Ids of plugins with a newer version in range (not pinned, not modified).

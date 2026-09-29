@@ -251,7 +251,25 @@ func _search() -> void:
 		var index := _results.add_item("%s  ·  %s" % [asset["title"], asset["author"]])
 		_results.set_item_metadata(index, asset)
 	_search_status.text = "Found: %d. Select a plugin." % _results.item_count if _results.item_count > 0 else "Nothing found."
+	if _take_over:
+		_pick_exact_match()
 	_validate()
+
+
+## For an existing plugin, a result with exactly its name is selected right away.
+func _pick_exact_match() -> void:
+	var wanted := _normalized(_query_edit.text)
+	var matches: Array[int] = []
+	for index in _results.item_count:
+		if _normalized(str((_results.get_item_metadata(index) as Dictionary)["title"])) == wanted:
+			matches.append(index)
+	if matches.size() == 1:
+		_results.select(matches[0])
+		_on_result_selected(matches[0])
+
+
+func _normalized(text: String) -> String:
+	return RegEx.create_from_string("[^a-z0-9]+").sub(text.to_lower(), "", true)
 
 
 func _on_result_selected(index: int) -> void:
