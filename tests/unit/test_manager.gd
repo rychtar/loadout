@@ -619,3 +619,15 @@ func test_install_missing_reports_folder_mismatch() -> void:
 	var fixed: Dictionary = await manager.use_package_folders(summary["folders"])
 	check_eq(fixed["installed"], PackedStringArray(["fake_a"]), "installed after fixing the folder")
 	check(DirAccess.dir_exists_absolute(addons.path_join("fake_a")), "right folder")
+
+
+func test_lock_version_wins_over_plugin_cfg() -> void:
+	# Asset Library says 1.0.5 while the package's plugin.cfg still says 1.0.0.
+	_setup("cfg_version", [_local("fake_a", "1.0.0")])
+	var source := FakeSource.new({ "1.0.5": FIXTURES.path_join("1.0.0") })
+	fake_sources["fake_a"] = source
+	await manager.refresh()
+	var result: Dictionary = await manager.install("fake_a")
+	check(result["ok"], "installed: %s" % result["error"])
+	check_eq(_status("fake_a"), Manager.Status.OK, "no endless update offer")
+	check_eq(manager.get_state("fake_a").installed_version, "1.0.5", "the version Loadout installed")

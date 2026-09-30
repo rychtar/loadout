@@ -501,6 +501,10 @@ func _compute_state(entry: LoadoutRegistry.Entry, check_updates: bool = false) -
 			state.message = "Pinned to %s in this project." % state.installed_version
 		_:
 			state.status = Status.OK
+			# Loadout installed these exact files: the release version counts, plugin.cfg may lag
+			# behind (e.g. an Asset Library version string newer than the package's plugin.cfg).
+			if state.lock_entry != null and state.lock_entry.folder_hash != "":
+				state.installed_version = state.lock_entry.version
 			if source_error != "":
 				state.status = Status.UNVERIFIED
 				state.message = source_error
