@@ -419,6 +419,18 @@ func _remove_action(state: LoadoutManager.PluginState) -> void:
 
 func _install_missing() -> Dictionary:
 	return _summary_result(await manager.install_missing(), "Some plugins could not be installed:")
+## Packages that keep the plugin in another folder than the registry: one question for all of them.
+func _offer_package_folders(folders: Dictionary) -> void:
+	if folders.is_empty():
+		return
+	var lines: PackedStringArray = []
+	for id: String in folders:
+		var state := manager.get_state(id)
+		lines.append("•  %s: addons/%s → addons/%s" % [state.display_name if state != null else id,
+				state.entry.folder if state != null and state.entry != null else "?", folders[id]])
+	_ask("These packages keep the plugin in another folder than the registry:\n\n%s\n\nPlugins often use fixed res://addons/<folder>/ paths and break under another name. Use the package folders and install?"
+			% "\n".join(lines), "Use package folders", func() -> Dictionary:
+				return _summary_result(await manager.use_package_folders(folders), "Some plugins could not be installed:"), "Not now")
 
 
 func _summary_result(summary: Dictionary, heading: String) -> Dictionary:
@@ -449,7 +461,14 @@ func _handle_result(result: Variant) -> void:
 				if notice != "":
 					_show_alert(notice)
 				return
-			if result.get("needs_confirmation", "") != "":
+			if result.get("needs_confirmation", "") == LoadoutInstaller.CONFIRM_FOLDER:
+				var folder_id: String = result["id"]
+				var package_folder: String = result["package_folder"]
+				_ask("%s\n\nPlugins often use fixed res://addons/<folder>/ paths and break under another name. Use addons/%s in the registry and install?"
+						% [result["error"], package_folder], "Use %s" % package_folder, func() -> Variant:
+							var error := await manager.set_registry_folder(folder_id, package_folder)
+							return error if error != "" else await manager.install(folder_id))
+			elif result.get("needs_confirmation", "") != "":
 				var id: String = result["id"]
 				_ask(result["error"] + "\n\nOverwrite anyway? The current content is backed up.", "Overwrite",
 						func() -> Dictionary: return await manager.install(id, true))

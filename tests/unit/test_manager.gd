@@ -590,3 +590,32 @@ func test_unknown_version_refused() -> void:
 	_fake("fake_a", ["1.0.0"])
 	await manager.refresh()
 	check(not (await manager.install("fake_a", false, "9.9.9"))["ok"], "version the source does not have")
+
+
+func test_package_folder_mismatch_on_first_install() -> void:
+	_setup("folder_mismatch", [_local("fake_a", "1.0.0", { "folder": "fake_a_wrong" })])
+	var source := _fake("fake_a", ["1.0.0"])
+	source.package_folder = "fake_a"
+	await manager.refresh()
+	var result: Dictionary = await manager.install("fake_a")
+	check_eq(result["needs_confirmation"], Installer.CONFIRM_FOLDER, "asks before installing under another name")
+	check_eq(result["package_folder"], "fake_a", "folder used by the package")
+	check(not DirAccess.dir_exists_absolute(addons.path_join("fake_a_wrong")), "nothing installed")
+	check_eq(await manager.set_registry_folder("fake_a", "fake_a"), "", "registry fixed")
+	check_eq(Registry.load_file(_registry_path())["registry"].get_entry("fake_a").folder, "fake_a", "saved")
+	var retry: Dictionary = await manager.install("fake_a")
+	check(retry["ok"], "installed into the right folder: %s" % retry["error"])
+	check(DirAccess.dir_exists_absolute(addons.path_join("fake_a")), "right folder")
+
+
+func test_install_missing_reports_folder_mismatch() -> void:
+	_setup("missing_folder", [_local("fake_a", "1.0.0", { "folder": "fake_a_wrong" })])
+	var source := _fake("fake_a", ["1.0.0"])
+	source.package_folder = "fake_a"
+	await manager.refresh()
+	var summary: Dictionary = await manager.install_missing()
+	check(summary["failed"].is_empty(), "not a failure")
+	check_eq(summary["folders"], { "fake_a": "fake_a" }, "package folder to confirm")
+	var fixed: Dictionary = await manager.use_package_folders(summary["folders"])
+	check_eq(fixed["installed"], PackedStringArray(["fake_a"]), "installed after fixing the folder")
+	check(DirAccess.dir_exists_absolute(addons.path_join("fake_a")), "right folder")

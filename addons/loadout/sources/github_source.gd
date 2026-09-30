@@ -99,7 +99,8 @@ func fetch(version: String, dest_dir: String) -> Dictionary:
 	if not extracted["ok"]:
 		Fs.remove_dir(dest_dir)
 		return { "ok": false, "error": extracted["error"], "path": "" }
-	return { "ok": true, "error": "", "path": dest_dir, "warning": folder_warning(extracted["source_folder"], folder) }
+	return { "ok": true, "error": "", "path": dest_dir, "package_folder": extracted["source_folder"],
+			"warning": folder_warning(extracted["source_folder"], folder) }
 
 
 func _parse_release(item: Dictionary) -> Dictionary:

@@ -162,14 +162,37 @@ func missing_ids() -> PackedStringArray:
 
 
 ## Installs every plugin from missing_ids(). Returns { "installed": PackedStringArray,
-## "failed": { id: error }, "restart_recommended": bool }.
+## "failed": { id: error }, "folders": { id: package folder } (packages that keep the plugin in
+## another folder than the registry, to confirm with use_package_folders()), "restart_recommended": bool }.
 func install_missing() -> Dictionary:
-	var summary := { "installed": PackedStringArray(), "failed": {}, "restart_recommended": false }
-	for id in missing_ids():
+	return await _install_all(missing_ids())
+
+
+## Sets each plugin's registry folder to the folder its package uses ({ id: folder }) and installs it.
+## Returns the same summary as install_missing().
+func use_package_folders(folders: Dictionary) -> Dictionary:
+	var ids: PackedStringArray = []
+	var summary := { "installed": PackedStringArray(), "failed": {}, "folders": {}, "restart_recommended": false }
+	for id: String in folders:
+		var error := await set_registry_folder(id, folders[id])
+		if error != "":
+			summary["failed"][id] = error
+		else:
+			ids.append(id)
+	var installed := await _install_all(ids)
+	installed["failed"].merge(summary["failed"])
+	return installed
+
+
+func _install_all(ids: PackedStringArray) -> Dictionary:
+	var summary := { "installed": PackedStringArray(), "failed": {}, "folders": {}, "restart_recommended": false }
+	for id in ids:
 		var result := await install(id)
 		if result["ok"]:
 			summary["installed"].append(id)
 			summary["restart_recommended"] = summary["restart_recommended"] or result["restart_recommended"]
+		elif result.get("needs_confirmation", "") == LoadoutInstaller.CONFIRM_FOLDER:
+			summary["folders"][id] = result["package_folder"]
 		else:
 			summary["failed"][id] = result["error"]
 	return summary
@@ -362,6 +385,32 @@ func add_registry_entry(data: Dictionary, take_over: bool = false) -> String:
 	if take_over and _lock_ok and DirAccess.dir_exists_absolute(dir) and lockfile.get_entry(entry.id) == null:
 		lockfile.set_installed(entry.id, installer.installed_version(entry), Fs.hash_dir(dir), _today())
 		_save_lock()
+	await refresh()
+	return ""
+
+
+## Changes the plugin folder of a registry entry (e.g. to the folder its package uses).
+## Returns "" or an error message.
+func set_registry_folder(id: String, folder: String) -> String:
+	if not _registry_ok:
+		return "The registry cannot be read, nothing changed."
+	var entry := registry.get_entry(id)
+	if entry == null:
+		return "The plugin is not in the registry."
+	var data := entry.to_dict()
+	data["folder"] = folder
+	var parsed := LoadoutRegistry.parse_entry(data)
+	if not parsed["ok"]:
+		return parsed["error"]
+	for other in registry.entries:
+		if other != entry and other.folder.to_lower() == folder.to_lower():
+			return "Folder %s is already used by %s." % [folder, other.id]
+	var previous := entry.folder
+	entry.folder = folder
+	var err := registry.save_file(registry_path)
+	if err != OK:
+		entry.folder = previous
+		return "Saving the registry failed: %s" % error_string(err)
 	await refresh()
 	return ""
 

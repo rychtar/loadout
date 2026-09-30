@@ -66,8 +66,8 @@ func get_plugin_name() -> String:
 
 
 ## Puts the plugin folder content of version into dest_dir (created by the source).
-## Returns { "ok": bool, "error": String, "path": String, "warning": String (optional) } where
-## path holds plugin.cfg.
+## Returns { "ok": bool, "error": String, "path": String, "package_folder": String (optional, the
+## plugin's folder name inside the package), "warning": String (optional) } where path holds plugin.cfg.
 func fetch(_version: String, _dest_dir: String) -> Dictionary:
 	return { "ok": false, "error": "The source cannot download.", "path": "" }
 

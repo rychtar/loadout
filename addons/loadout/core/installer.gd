@@ -17,6 +17,8 @@ const Log := preload("../util/log.gd")
 const CONFIRM_MODIFIED := "modified"
 const CONFIRM_PINNED := "pinned"
 const CONFIRM_UNMANAGED := "unmanaged"
+## First install of a package that keeps the plugin in another folder than the registry entry.
+const CONFIRM_FOLDER := "folder"
 
 signal plugin_installed(id: String, version: String)
 signal plugin_updated(id: String, from_version: String, to_version: String)
@@ -71,7 +73,7 @@ func install(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: Strin
 	var result := {
 		"ok": false, "error": "", "id": entry.id, "from": installed_version(entry), "to": version,
 		"hash": "", "backup_path": "", "restored": false, "restart_recommended": false, "needs_confirmation": "",
-		"warning": "",
+		"warning": "", "package_folder": "",
 	}
 	if not force:
 		var reason := check_overwrite(entry, lock_entry)
@@ -90,6 +92,14 @@ func install(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: Strin
 	if not FileAccess.file_exists(staged.path_join("plugin.cfg")):
 		Fs.remove_dir(staging)
 		return _fail(result, "Package %s %s has no plugin.cfg." % [entry.id, version])
+	result["package_folder"] = str(fetched.get("package_folder", ""))
+	if not DirAccess.dir_exists_absolute(target_dir(entry)) and result["package_folder"] != "" \
+			and result["package_folder"] != entry.folder:
+		# Plugins often use fixed res://addons/<folder>/ paths: ask before installing under another name.
+		Fs.remove_dir(staging)
+		result["needs_confirmation"] = CONFIRM_FOLDER
+		result["error"] = "The package keeps the plugin in addons/%s, the registry says addons/%s." % [result["package_folder"], entry.folder]
+		return result
 	result["warning"] = str(fetched.get("warning", ""))
 	if result["warning"] != "":
 		Log.write(result["warning"], Log.Level.WARNING)
