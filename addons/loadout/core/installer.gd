@@ -55,10 +55,11 @@ func check_overwrite(entry: LoadoutRegistry.Entry, lock_entry: LoadoutLockfile.E
 		return ""
 	if lock_entry == null:
 		return CONFIRM_UNMANAGED
-	if lock_entry.pinned:
-		return CONFIRM_PINNED
+	# Manual edits are the stronger reason: they would be lost, a pin only delays updates.
 	if lock_entry.folder_hash != "" and Fs.hash_dir(target_dir(entry)) != lock_entry.folder_hash:
 		return CONFIRM_MODIFIED
+	if lock_entry.pinned:
+		return CONFIRM_PINNED
 	return ""
 
 

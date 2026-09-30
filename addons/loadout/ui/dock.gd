@@ -6,6 +6,7 @@ extends VBoxContainer
 ## the editor theme so it fits light and dark themes.
 
 const RegistryDialog := preload("registry_dialog.gd")
+const VersionDialog := preload("version_dialog.gd")
 const Status := LoadoutManager.Status
 ## Characters of release notes shown in the update confirmation.
 const NOTES_PREVIEW := 600
@@ -47,6 +48,7 @@ var _busy_label: Label
 var _confirm: ConfirmationDialog
 var _alert: AcceptDialog
 var _registry_dialog: RegistryDialog
+var _version_dialog: VersionDialog
 var _export_dialog: EditorFileDialog
 var _import_dialog: EditorFileDialog
 var _on_confirm: Callable
@@ -317,6 +319,11 @@ func _add_actions(state: LoadoutManager.PluginState) -> void:
 			_overwrite_action(state)
 		Status.ORPHAN:
 			_action("Forget (remove from lock)", func() -> Error: return await manager.forget(id))
+	if state.entry != null and state.entry.folder != LoadoutManager.SELF_FOLDER \
+			and state.status in [Status.MISSING, Status.OK, Status.UPDATE, Status.PINNED, Status.UNVERIFIED]:
+		var versions := manager.available_versions(id)
+		if versions.size() > 1:
+			_action("Install version…", func() -> void: _version_dialog.open_for(state, versions))
 	if state.entry != null:
 		_action("Remove from registry…", func() -> void:
 			_ask("Remove %s from the global registry? This affects all projects. Files in this project stay." % state.display_name,

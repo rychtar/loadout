@@ -189,24 +189,57 @@ func install_updates() -> Dictionary:
 	return summary
 
 
-## Installs or updates the plugin to its target version. Without force a modified, pinned or
-## unmanaged folder is left alone and the result has "needs_confirmation" set.
-func install(id: String, force: bool = false) -> Dictionary:
+## Versions the plugin's source offers, newest first: [{ "version", "tag", "prerelease",
+## "notes", "url", "in_range": bool }]. Asset Library and local sources offer one version.
+func available_versions(id: String) -> Array[Dictionary]:
+	var list: Array[Dictionary] = []
+	var state := get_state(id)
+	var source: LoadoutSource = _sources.get(id)
+	if state == null or state.entry == null or source == null:
+		return list
+	for release in source.releases:
+		var version := str(release.get("version", ""))
+		if LoadoutVersion.parse(version) == null:
+			continue
+		list.append({
+			"version": version, "tag": str(release.get("tag", version)), "prerelease": bool(release.get("prerelease", false)),
+			"notes": str(release.get("notes", "")), "url": str(release.get("url", "")),
+			"in_range": LoadoutVersion.satisfies(version, state.entry.version_range),
+		})
+	list.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return LoadoutVersion.parse(a["version"]).compare(LoadoutVersion.parse(b["version"])) > 0)
+	return list
+
+
+## Installs or updates the plugin to its target version, or to version when given (an explicit
+## choice: a pinned plugin may switch, and pin decides whether it stays pinned afterwards).
+## Without force a modified, pinned or unmanaged folder is left alone and the result has
+## "needs_confirmation" set.
+func install(id: String, force: bool = false, version: String = "", pin: bool = false) -> Dictionary:
 	var state := get_state(id)
 	var refusal := _refuse_action(state)
 	if refusal != "":
 		return _error_result(id, refusal)
-	if state.target_version == "":
-		return _error_result(id, state.message if state.message != "" else "No version to install is known.")
 	var source: LoadoutSource = _sources.get(id)
 	if source == null:
 		return _error_result(id, "Source type %s is not supported." % state.entry.source.get("type"))
+	var target := state.target_version
+	if version != "":
+		if not await source.has_version(version):
+			return _error_result(id, "The source does not offer version %s." % version)
+		target = version
+		if state.status == Status.PINNED and not _is_modified(state):
+			force = true
+	if target == "":
+		return _error_result(id, state.message if state.message != "" else "No version to install is known.")
 	if state.entry.folder == SELF_FOLDER:
-		return await _self_update(state, source, force)
+		return await _self_update(state, source, force, target)
 	busy = true
-	var result: Dictionary = await installer.install(state.entry, source, state.target_version, state.lock_entry, force)
+	var result: Dictionary = await installer.install(state.entry, source, target, state.lock_entry, force)
 	if result["ok"]:
-		lockfile.set_installed(id, state.target_version, result["hash"], _today())
+		lockfile.set_installed(id, target, result["hash"], _today())
+		if version != "":
+			lockfile.set_pinned(id, pin)
 		lockfile.set_ignored(id, false)
 		_save_lock()
 		if result["restart_recommended"]:
@@ -440,7 +473,7 @@ func _add_release_info(state: PluginState, source: LoadoutSource) -> void:
 	state.release_url = str(release.get("url", ""))
 
 
-func _self_update(state: PluginState, source: LoadoutSource, force: bool) -> Dictionary:
+func _self_update(state: PluginState, source: LoadoutSource, force: bool, version: String) -> Dictionary:
 	if not force:
 		var reason := installer.check_overwrite(state.entry, state.lock_entry)
 		if reason == LoadoutInstaller.CONFIRM_MODIFIED or reason == LoadoutInstaller.CONFIRM_PINNED:
@@ -448,9 +481,9 @@ func _self_update(state: PluginState, source: LoadoutSource, force: bool) -> Dic
 			result["needs_confirmation"] = reason
 			return result
 	busy = true
-	var result: Dictionary = await installer.self_update(state.entry, source, state.target_version)
+	var result: Dictionary = await installer.self_update(state.entry, source, version)
 	if result["ok"]:
-		lockfile.set_installed(state.id, state.target_version, result["hash"], _today())
+		lockfile.set_installed(state.id, version, result["hash"], _today())
 		_save_lock()
 		restart_required.emit()
 	busy = false
@@ -475,6 +508,12 @@ func _scan_unregistered() -> Array[Dictionary]:
 		})
 	found.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a["name"].naturalnocasecmp_to(b["name"]) < 0)
 	return found
+
+
+func _is_modified(state: PluginState) -> bool:
+	if state.lock_entry == null or state.lock_entry.folder_hash == "":
+		return false
+	return Fs.hash_dir(installer.target_dir(state.entry)) != state.lock_entry.folder_hash
 
 
 func _orphan_state(id: String) -> PluginState:

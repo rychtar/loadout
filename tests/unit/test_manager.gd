@@ -543,3 +543,50 @@ func test_removed_registry_entry_is_not_announced() -> void:
 	await manager.install_missing()
 	await manager.remove_registry_entry("fake_a")
 	check(manager.detect_new_addons().is_empty(), "the user removed it from the registry on purpose")
+
+
+func test_available_versions() -> void:
+	_setup("versions", [_local("fake_a", "1.0.0", { "range": "^1.0.0" })])
+	var source := _fake("fake_a", ["1.0.0", "1.1.0"])
+	source.versions["2.0.0"] = FIXTURES.path_join("1.1.0")
+	await manager.refresh()
+	var versions: PackedStringArray = []
+	var in_range: Array[bool] = []
+	for release in manager.available_versions("fake_a"):
+		versions.append(release["version"])
+		in_range.append(release["in_range"])
+	check_eq(versions, PackedStringArray(["2.0.0", "1.1.0", "1.0.0"]), "newest first")
+	check_eq(in_range, [false, true, true] as Array[bool], "range marked")
+	check(manager.available_versions("unknown").is_empty(), "unknown plugin")
+
+
+func test_install_chosen_version_and_pin() -> void:
+	_setup("install_version", [_local("fake_a", "1.0.0")])
+	_fake("fake_a", ["1.0.0", "1.1.0"])
+	await manager.refresh()
+	var result: Dictionary = await manager.install("fake_a", false, "1.0.0", true)
+	check(result["ok"], "installed: %s" % result["error"])
+	check_eq(_saved_lock().get_entry("fake_a").version, "1.0.0", "chosen version locked")
+	check(_saved_lock().get_entry("fake_a").pinned, "pinned as asked")
+	check_eq(_status("fake_a"), Manager.Status.PINNED, "no update offered")
+	var switched: Dictionary = await manager.install("fake_a", false, "1.1.0", false)
+	check(switched["ok"], "a pinned plugin can switch versions on explicit choice: %s" % switched["error"])
+	check_eq(_status("fake_a"), Manager.Status.OK, "unpinned at the newest version")
+
+
+func test_chosen_version_never_overwrites_manual_edits() -> void:
+	_setup("version_modified", [_local("fake_a", "1.0.0")])
+	_fake("fake_a", ["1.0.0", "1.1.0"])
+	await manager.refresh()
+	await manager.install("fake_a", false, "1.0.0", true)
+	write_text(addons.path_join("fake_a/plugin.gd"), "# edited")
+	await manager.refresh()
+	var result: Dictionary = await manager.install("fake_a", false, "1.1.0", true)
+	check_eq(result["needs_confirmation"], Installer.CONFIRM_MODIFIED, "edited files still need confirmation")
+
+
+func test_unknown_version_refused() -> void:
+	_setup("bad_version", [_local("fake_a", "1.0.0")])
+	_fake("fake_a", ["1.0.0"])
+	await manager.refresh()
+	check(not (await manager.install("fake_a", false, "9.9.9"))["ok"], "version the source does not have")
