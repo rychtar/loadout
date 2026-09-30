@@ -7,6 +7,7 @@ extends VBoxContainer
 
 const RegistryDialog := preload("registry_dialog.gd")
 const VersionDialog := preload("version_dialog.gd")
+const InstallDialog := preload("install_dialog.gd")
 const Status := LoadoutManager.Status
 ## Characters of release notes shown in the update confirmation.
 const NOTES_PREVIEW := 600
@@ -49,6 +50,7 @@ var _confirm: ConfirmationDialog
 var _alert: AcceptDialog
 var _registry_dialog: RegistryDialog
 var _version_dialog: VersionDialog
+var _install_dialog: InstallDialog
 var _export_dialog: EditorFileDialog
 var _import_dialog: EditorFileDialog
 var _on_confirm: Callable
@@ -68,20 +70,25 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
-	for dialog: Window in [_confirm, _alert, _registry_dialog, _export_dialog, _import_dialog]:
+	for dialog: Window in [_confirm, _alert, _registry_dialog, _version_dialog, _install_dialog, _export_dialog, _import_dialog]:
 		if is_instance_valid(dialog):
 			dialog.queue_free()
 
 
-## Called after the startup sync: offers to install plugins missing in this project.
+## Called after the startup sync and by "Install missing": lets the user pick which missing
+## plugins to install, the unchecked ones can be ignored in this project.
 func offer_missing(ids: PackedStringArray) -> void:
-	var lines: PackedStringArray = []
+	var items: Array[Dictionary] = []
 	for id in ids:
 		var state := manager.get_state(id)
 		var version := state.target_version if state.target_version != "" else "?"
-		lines.append("•  %s %s  (%s)" % [state.display_name, version, _short_source(state.source_label)])
-	_ask("%d global plugin(s) missing in this project:\n\n%s\n\nInstall them now?" % [ids.size(), "\n".join(lines)],
-			"Install all", _install_missing, "Later")
+		items.append({
+			"id": id,
+			"label": "%s %s  (%s)" % [state.display_name, version, _short_source(state.source_label)],
+			"enabled": state.target_version != "",
+			"tooltip": state.message if state.target_version == "" else state.source_label,
+		})
+	_install_dialog.open_for(items)
 
 
 ## Called when plugins appear in addons/ outside Loadout (e.g. installed from Godot's asset store):
@@ -126,7 +133,7 @@ func _build() -> void:
 	add_child(_problems_label)
 
 	_install_missing_button = Button.new()
-	_install_missing_button.pressed.connect(func() -> void: _run(_install_missing))
+	_install_missing_button.pressed.connect(func() -> void: offer_missing(manager.missing_ids()))
 	add_child(_install_missing_button)
 	_update_all_button = Button.new()
 	_update_all_button.pressed.connect(_confirm_update_all)
@@ -203,6 +210,14 @@ func _build() -> void:
 	_import_dialog = _file_dialog(EditorFileDialog.FILE_MODE_OPEN_FILE, "Import registry")
 	_import_dialog.file_selected.connect(func(path: String) -> void: _run(_import_registry.bind(path)))
 	base.add_child(_import_dialog)
+	_install_dialog = InstallDialog.new()
+	_install_dialog.install_chosen.connect(func(ids: PackedStringArray, ignore: PackedStringArray) -> void:
+		_run(_install_selected.bind(ids, ignore)))
+	base.add_child(_install_dialog)
+	_version_dialog = VersionDialog.new()
+	_version_dialog.version_chosen.connect(func(id: String, version: String, pin: bool) -> void:
+		_run(func() -> Dictionary: return await manager.install(id, false, version, pin)))
+	base.add_child(_version_dialog)
 	_registry_dialog = RegistryDialog.new()
 	_registry_dialog.store_search = store_search
 	_registry_dialog.entry_submitted.connect(func(data: Dictionary, take_over: bool) -> void:
@@ -235,7 +250,7 @@ func _rebuild() -> void:
 	_problems_label.text = "\n".join(problems)
 	_problems_label.visible = not problems.is_empty()
 	var missing := manager.missing_ids()
-	_install_missing_button.text = "Install missing (%d)" % missing.size()
+	_install_missing_button.text = "Install missing (%d)…" % missing.size()
 	_install_missing_button.visible = not missing.is_empty()
 	var updates := manager.update_ids()
 	_update_all_button.text = "Update all (%d)…" % updates.size()
@@ -417,8 +432,12 @@ func _remove_action(state: LoadoutManager.PluginState) -> void:
 				"Remove", func() -> Dictionary: return await manager.uninstall(state.id)))
 
 
-func _install_missing() -> Dictionary:
-	return _summary_result(await manager.install_missing(), "Some plugins could not be installed:")
+func _install_selected(ids: PackedStringArray, ignore: PackedStringArray) -> Dictionary:
+	var summary: Dictionary = await manager.install_selected(ids, ignore)
+	_offer_package_folders(summary.get("folders", {}))
+	return _summary_result(summary, "Some plugins could not be installed:")
+
+
 ## Packages that keep the plugin in another folder than the registry: one question for all of them.
 func _offer_package_folders(folders: Dictionary) -> void:
 	if folders.is_empty():

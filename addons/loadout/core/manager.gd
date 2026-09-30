@@ -168,6 +168,17 @@ func install_missing() -> Dictionary:
 	return await _install_all(missing_ids())
 
 
+## Installs the chosen missing plugins and ignores the ones in ignore (they are not offered in
+## this project again). Returns the same summary as install_missing().
+func install_selected(ids: PackedStringArray, ignore: PackedStringArray = []) -> Dictionary:
+	if not ignore.is_empty() and _lock_ok:
+		for id in ignore:
+			lockfile.set_ignored(id, true)
+		_save_lock()
+		await refresh()
+	return await _install_all(ids)
+
+
 ## Sets each plugin's registry folder to the folder its package uses ({ id: folder }) and installs it.
 ## Returns the same summary as install_missing().
 func use_package_folders(folders: Dictionary) -> Dictionary:

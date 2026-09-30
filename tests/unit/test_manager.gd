@@ -631,3 +631,21 @@ func test_lock_version_wins_over_plugin_cfg() -> void:
 	check(result["ok"], "installed: %s" % result["error"])
 	check_eq(_status("fake_a"), Manager.Status.OK, "no endless update offer")
 	check_eq(manager.get_state("fake_a").installed_version, "1.0.5", "the version Loadout installed")
+
+
+func test_install_selected_and_ignore_the_rest() -> void:
+	_setup("selected", [_local("fake_a", "1.0.0"), _local("fake_b", "1.0.0")])
+	await manager.refresh()
+	var summary: Dictionary = await manager.install_selected(PackedStringArray(["fake_a"]), PackedStringArray(["fake_b"]))
+	check_eq(summary["installed"], PackedStringArray(["fake_a"]), "only the chosen plugin")
+	check_eq(_status("fake_a"), Manager.Status.OK, "installed")
+	check_eq(_status("fake_b"), Manager.Status.IGNORED, "unchecked one ignored in this project")
+	check(_saved_lock().is_ignored("fake_b"), "saved")
+	check(manager.missing_ids().is_empty(), "nothing offered anymore")
+
+
+func test_install_selected_without_ignoring() -> void:
+	_setup("selected_keep", [_local("fake_a", "1.0.0"), _local("fake_b", "1.0.0")])
+	await manager.refresh()
+	await manager.install_selected(PackedStringArray(["fake_a"]))
+	check_eq(manager.missing_ids(), PackedStringArray(["fake_b"]), "still offered next time")
