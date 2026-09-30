@@ -6,6 +6,8 @@ extends ConfirmationDialog
 
 ## take_over: the plugin is already in the project and Loadout should adopt its current files.
 signal entry_submitted(data: Dictionary, take_over: bool)
+## Edit mode: the changed entry (id and folder stay, see LoadoutManager.update_registry_entry()).
+signal entry_edited(id: String, data: Dictionary)
 
 const SOURCE_GITHUB := 0
 const SOURCE_LOCAL := 1
@@ -26,6 +28,10 @@ var _search_status: Label
 var _store_asset := ""
 var _existing_label: Label
 var _take_over := false
+## Id of the entry being edited, "" when adding.
+var _editing_id := ""
+## Source of an edited entry that the dialog cannot show (the old Asset Library); kept unless replaced.
+var _legacy_source := {}
 var _repo_edit: LineEdit
 var _auto_names := true
 var _setting_names := false
@@ -158,8 +164,12 @@ func _init() -> void:
 
 func open() -> void:
 	title = "Add a plugin to the global registry"
+	ok_button_text = "Add to registry"
 	_take_over = false
+	_editing_id = ""
+	_legacy_source = {}
 	_existing_label.visible = false
+	_id_edit.editable = true
 	_folder_edit.editable = true
 	_auto_names = true
 	_repo_edit.text = ""
@@ -192,6 +202,49 @@ func open_existing(info: Dictionary) -> void:
 	_query_edit.text = info["name"]
 	reset_size()
 	_search()
+
+
+## Opens the dialog for an entry already in the registry: source, allowed versions and automatic
+## install can change, id and folder cannot (installed copies would not move).
+func open_edit(entry: LoadoutRegistry.Entry, display_name: String) -> void:
+	open()
+	title = "Edit %s" % display_name
+	ok_button_text = "Save"
+	_editing_id = entry.id
+	_auto_names = false
+	_set_names(entry.id)
+	_folder_edit.text = entry.folder
+	_id_edit.editable = false
+	_folder_edit.editable = false
+	_range_edit.text = entry.version_range
+	_auto_check.button_pressed = entry.auto_install
+	_existing_label.text = "Registry id %s, installed in addons/%s. Id and folder stay the same." % [entry.id, entry.folder]
+	_existing_label.visible = true
+	var search_now := false
+	match entry.source.get("type"):
+		LoadoutRegistry.SOURCE_GITHUB:
+			_source_option.select(_source_option.get_item_index(SOURCE_GITHUB))
+			_repo_edit.text = entry.source["repo"]
+		LoadoutRegistry.SOURCE_LOCAL:
+			_source_option.select(_source_option.get_item_index(SOURCE_LOCAL))
+			_path_edit.text = entry.source["path"]
+		LoadoutRegistry.SOURCE_STORE:
+			_source_option.select(_source_option.get_item_index(SOURCE_STORE))
+			_store_asset = entry.source["asset"]
+		_:
+			_legacy_source = entry.source.duplicate()
+			_source_option.select(_source_option.get_item_index(SOURCE_STORE))
+			search_now = true
+	_on_source_changed()
+	if _source_option.get_selected_id() == SOURCE_STORE:
+		_query_edit.text = display_name
+		_search_status.text = ("Now from the old Asset Library (#%s). Pick an Asset Store result to switch, or save to keep it."
+				% _legacy_source.get("asset_id", "?")) if search_now else "Now %s. Search to switch to another asset." % _store_asset
+	reset_size()
+	if search_now:
+		_search()
+
+
 func _on_source_changed() -> void:
 	var selected := _source_option.get_selected_id()
 	_github_box.visible = selected == SOURCE_GITHUB
@@ -327,7 +380,7 @@ func _validate() -> void:
 		SOURCE_GITHUB:
 			has_source = _repo_edit.text.strip_edges() != ""
 		SOURCE_STORE:
-			has_source = _store_asset != ""
+			has_source = _store_asset != "" or not _legacy_source.is_empty()
 		SOURCE_LOCAL:
 			has_source = _plugin_dir(_path_edit.text.strip_edges()) != ""
 	var parsed := LoadoutRegistry.parse_entry(_entry_data())
@@ -351,12 +404,17 @@ func _source_data() -> Dictionary:
 		SOURCE_GITHUB:
 			return { "type": LoadoutRegistry.SOURCE_GITHUB, "repo": _repo_edit.text.strip_edges() }
 		SOURCE_STORE:
+			if _store_asset == "" and not _legacy_source.is_empty():
+				return _legacy_source
 			return { "type": LoadoutRegistry.SOURCE_STORE, "asset": _store_asset }
 	return { "type": LoadoutRegistry.SOURCE_LOCAL, "path": _path_edit.text.strip_edges() }
 
 
 func _on_confirmed() -> void:
-	entry_submitted.emit(_entry_data())
+	if _editing_id != "":
+		entry_edited.emit(_editing_id, _entry_data())
+	else:
+		entry_submitted.emit(_entry_data(), _take_over)
 
 
 func _caption(text: String) -> Label:

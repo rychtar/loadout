@@ -222,6 +222,8 @@ func _build() -> void:
 	_registry_dialog.store_search = store_search
 	_registry_dialog.entry_submitted.connect(func(data: Dictionary, take_over: bool) -> void:
 		_run(func() -> String: return await manager.add_registry_entry(data, take_over)))
+	_registry_dialog.entry_edited.connect(func(id: String, data: Dictionary) -> void:
+		_run(func() -> String: return await manager.update_registry_entry(id, data)))
 	base.add_child(_registry_dialog)
 
 
@@ -340,6 +342,7 @@ func _add_actions(state: LoadoutManager.PluginState) -> void:
 		if versions.size() > 1:
 			_action("Install version…", func() -> void: _version_dialog.open_for(state, versions))
 	if state.entry != null:
+		_action("Edit…", func() -> void: _registry_dialog.open_edit(state.entry, state.display_name))
 		_action("Remove from registry…", func() -> void:
 			_ask("Remove %s from the global registry? This affects all projects. Files in this project stay." % state.display_name,
 					"Remove from registry", func() -> Error: return await manager.remove_registry_entry(id)))

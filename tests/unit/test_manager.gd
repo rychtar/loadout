@@ -649,3 +649,43 @@ func test_install_selected_without_ignoring() -> void:
 	await manager.refresh()
 	await manager.install_selected(PackedStringArray(["fake_a"]))
 	check_eq(manager.missing_ids(), PackedStringArray(["fake_b"]), "still offered next time")
+
+
+func test_edit_registry_entry() -> void:
+	_setup("edit", [_local("fake_a", "1.0.0", { "range": "~1.0.0" })])
+	var source := _fake("fake_a", ["1.0.0"])
+	await manager.refresh()
+	await manager.install_missing()
+	source.versions["1.1.0"] = FIXTURES.path_join("1.1.0")
+	await manager.refresh(true)
+	check_eq(_status("fake_a"), Manager.Status.OK, "1.1.0 outside ~1.0.0")
+	var data := manager.registry.get_entry("fake_a").to_dict()
+	data["range"] = "^1.0.0"
+	data["auto_install"] = false
+	check_eq(await manager.update_registry_entry("fake_a", data), "", "saved")
+	check_eq(_status("fake_a"), Manager.Status.UPDATE, "new range offers the update right away")
+	var saved: Registry.Entry = Registry.load_file(_registry_path())["registry"].get_entry("fake_a")
+	check_eq([saved.version_range, saved.auto_install], ["^1.0.0", false], "written to the registry")
+
+
+func test_edit_keeps_id_and_folder() -> void:
+	_setup("edit_fixed", [_local("fake_a", "1.0.0")])
+	await manager.refresh()
+	var data := manager.registry.get_entry("fake_a").to_dict()
+	data["id"] = "renamed"
+	data["folder"] = "elsewhere"
+	data["range"] = "^1.0.0"
+	check_eq(await manager.update_registry_entry("fake_a", data), "", "saved")
+	var entry := manager.registry.get_entry("fake_a")
+	check(entry != null and entry.folder == "fake_a", "id and folder unchanged")
+	check(manager.registry.get_entry("renamed") == null, "no new entry")
+
+
+func test_edit_rejects_invalid_data() -> void:
+	_setup("edit_invalid", [_local("fake_a", "1.0.0")])
+	await manager.refresh()
+	var data := manager.registry.get_entry("fake_a").to_dict()
+	data["range"] = ">=1"
+	check(await manager.update_registry_entry("fake_a", data) != "", "invalid range refused")
+	check_eq(Registry.load_file(_registry_path())["registry"].get_entry("fake_a").version_range, "*", "registry untouched")
+	check(await manager.update_registry_entry("missing", data) != "", "unknown plugin")

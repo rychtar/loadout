@@ -400,6 +400,35 @@ func add_registry_entry(data: Dictionary, take_over: bool = false) -> String:
 	return ""
 
 
+## Replaces source, version range and auto_install of a registry entry; id and folder stay (a new
+## folder would not move installed copies, see set_registry_folder()). Returns "" or an error message.
+func update_registry_entry(id: String, data: Dictionary) -> String:
+	if not _registry_ok:
+		return "The registry cannot be read, nothing changed."
+	var entry := registry.get_entry(id)
+	if entry == null:
+		return "The plugin is not in the registry."
+	var merged := data.duplicate()
+	merged["id"] = entry.id
+	merged["folder"] = entry.folder
+	var parsed := LoadoutRegistry.parse_entry(merged)
+	if not parsed["ok"]:
+		return parsed["error"]
+	var updated: LoadoutRegistry.Entry = parsed["entry"]
+	var previous := entry.to_dict()
+	entry.source = updated.source
+	entry.version_range = updated.version_range
+	entry.auto_install = updated.auto_install
+	var err := registry.save_file(registry_path)
+	if err != OK:
+		entry.source = previous["source"]
+		entry.version_range = previous["range"]
+		entry.auto_install = previous["auto_install"]
+		return "Saving the registry failed: %s" % error_string(err)
+	await refresh()
+	return ""
+
+
 ## Changes the plugin folder of a registry entry (e.g. to the folder its package uses).
 ## Returns "" or an error message.
 func set_registry_folder(id: String, folder: String) -> String:
