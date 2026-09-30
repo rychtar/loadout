@@ -23,6 +23,7 @@ extends RefCounted
 
 const GodotEditorBridge := preload("res://addons/loadout/editor/godot_editor_bridge.gd")
 const Log := preload("res://addons/loadout/util/log.gd")
+const Fs := preload("res://addons/loadout/util/fs.gd")
 
 const FIXTURES := "res://tests/fixtures/addons/fake_a"
 const SMOKE_DIR := "user://loadout_smoke"
@@ -33,6 +34,13 @@ var _installer: LoadoutInstaller
 var _entry: LoadoutRegistry.Entry
 var _failures: PackedStringArray = []
 var _plugin: EditorPlugin
+# Dock smoke state, shared by the _dock_* steps.
+var _manager: LoadoutManager
+var _dock: Control
+var _confirm: ConfirmationDialog
+var _registry_dialog: ConfirmationDialog
+var _registry_path := ""
+var _original_registry := ""
 
 
 func _init(tree: SceneTree, plugin: EditorPlugin = null) -> void:
@@ -65,6 +73,8 @@ func run(mode: String) -> bool:
 			await _run_remote()
 		"self":
 			await _run_self()
+		"search":
+			await _run_search()
 		_:
 			_failures.append("unknown mode %s" % mode)
 	for failure in _failures:
@@ -103,76 +113,207 @@ func _run_remove() -> void:
 
 
 func _run_dock() -> void:
-	var manager: LoadoutManager = _plugin.get_manager()
-	var dock: Control = _plugin.get_dock()
-	_show_dock(dock)
-	var confirm: ConfirmationDialog = dock.get("_confirm")
-	if not await _wait_until(func() -> bool: return confirm.visible, 15000):
-		_failures.append("startup sync did not offer the missing plugin")
+	_manager = _plugin.get_manager()
+	_dock = _plugin.get_dock()
+	_confirm = _dock.get("_confirm")
+	_registry_dialog = _dock.get("_registry_dialog")
+	_registry_path = _cmdline_value("--loadout-registry=")
+	_original_registry = FileAccess.get_file_as_string(_registry_path)
+	_show_dock(_dock)
+	if not await _dock_install():
 		return
-	await _screenshot("dock_sync_offer", confirm)
-	confirm.get_ok_button().pressed.emit()
-	await _wait_until(func() -> bool: return manager.get_state("fake_a") != null and manager.get_state("fake_a").status == LoadoutManager.Status.OK, 30000)
+	await _dock_versions()
+	await _dock_update()
+	await _dock_edit()
+	await _dock_add_dialogs()
+	await _dock_new_addon()
+	# Cleanup: leave the project and the registry file as they were (no fake_a, no lock).
+	_write_text(_registry_path, _original_registry)
+	Fs.remove_dir("res://addons/fake_a")
+	await _installer.editor.scan()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(LoadoutLockfile.DEFAULT_PATH))
+
+
+## Startup offer with checkboxes, install of fake_a 1.0.0.
+func _dock_install() -> bool:
+	var install_dialog: ConfirmationDialog = _dock.get("_install_dialog")
+	if not await _wait_until(func() -> bool: return install_dialog.visible, 15000):
+		_failures.append("startup sync did not offer the missing plugin")
+		return false
+	await _screenshot("dock_sync_offer", install_dialog)
+	install_dialog.get_ok_button().pressed.emit()
+	await _wait_until(func() -> bool: return _status_of("fake_a") == LoadoutManager.Status.OK, 30000)
 	_expect_running("1.0.0", "installed from dock")
 	_expect(FileAccess.file_exists(LoadoutLockfile.DEFAULT_PATH), "project lock written")
-	var tree: Tree = dock.get("_tree")
-	tree.get_root().get_first_child().select(0)
+	_select_first_plugin()
 	await _screenshot("dock_installed")
+	return true
 
-	# A new version appears in the source: the registry now points to the 1.1.0 folder.
-	var registry_path := _cmdline_value("--loadout-registry=")
-	var original_registry := FileAccess.get_file_as_string(registry_path)
-	var registry: LoadoutRegistry = LoadoutRegistry.load_file(registry_path)["registry"]
+
+## Version choice: a source with several releases (extra ones only listed, never installed here).
+func _dock_versions() -> void:
+	var local_source: LoadoutSource = _manager.get_source("fake_a")
+	local_source.releases.append({ "version": "0.9.0", "tag": "v0.9.0", "prerelease": false, "notes": "First public version.", "url": "" })
+	local_source.releases.append({ "version": "2.0.0-beta.1", "tag": "v2.0.0-beta.1", "prerelease": true, "notes": "Preview of 2.0.", "url": "" })
+	_dock.call("_update_detail")
+	var version_button := _find_button(_dock, "Install version")
+	_expect(version_button != null, "version choice offered for a source with several releases")
+	if version_button == null:
+		return
+	version_button.pressed.emit()
+	var version_dialog: ConfirmationDialog = _dock.get("_version_dialog")
+	await _wait_until(func() -> bool: return version_dialog.visible, 5000)
+	var listed := (version_dialog.get("_list") as ItemList).item_count
+	_expect(listed == 3, "all versions listed (%d)" % listed)
+	await _screenshot("dock_version_dialog", version_dialog)
+	version_dialog.hide()
+	await _dialog_closed(version_dialog)
+
+
+## A new version appears in the source (registry points to 1.1.0): update from the dock.
+func _dock_update() -> void:
+	var registry: LoadoutRegistry = LoadoutRegistry.load_file(_registry_path)["registry"]
 	(registry.get_entry("fake_a").source as Dictionary)["path"] = _fixture("1.1.0")
-	registry.save_file(registry_path)
-	await manager.refresh(true)
-	_expect(manager.update_ids() == PackedStringArray(["fake_a"]), "update offered in the dock")
-	tree.get_root().get_first_child().select(0)
+	registry.save_file(_registry_path)
+	await _manager.refresh(true)
+	var updates := _manager.update_ids()
+	_expect(updates == PackedStringArray(["fake_a"]), "update offered in the dock (%s)" % updates)
+	_select_first_plugin()
 	await _screenshot("dock_update_available")
-	var update_button := _find_button(dock, "Update to 1.1.0")
+	var update_button := _find_button(_dock, "Update to 1.1.0")
 	_expect(update_button != null, "update button in the detail")
-	if update_button != null:
-		update_button.pressed.emit()
-		await _wait_until(func() -> bool: return confirm.visible, 5000)
-		await _screenshot("dock_update_confirm", confirm)
-		confirm.get_ok_button().pressed.emit()
-		await _wait_until(func() -> bool: return manager.get_state("fake_a").status == LoadoutManager.Status.OK, 30000)
-		_expect_running("1.1.0", "updated from the dock")
-		# FakeALegacy was removed in 1.1.0: the dock offers a restart, decline it.
-		if await _wait_until(func() -> bool: return confirm.visible, 5000):
-			await _screenshot("dock_restart_offer", confirm)
-			confirm.get_cancel_button().pressed.emit()
+	if update_button == null:
+		return
+	update_button.pressed.emit()
+	await _wait_until(func() -> bool: return _confirm.visible, 5000)
+	await _screenshot("dock_update_confirm", _confirm)
+	_confirm.get_ok_button().pressed.emit()
+	await _wait_until(func() -> bool: return _status_of("fake_a") == LoadoutManager.Status.OK, 30000)
+	_expect_running("1.1.0", "updated from the dock")
+	# FakeALegacy was removed in 1.1.0: the dock offers a restart, decline it.
+	if await _wait_until(func() -> bool: return _confirm.visible, 5000):
+		await _screenshot("dock_restart_offer", _confirm)
+		_confirm.get_cancel_button().pressed.emit()
+		await _dialog_closed(_confirm)
 
-	var registry_dialog: ConfirmationDialog = dock.get("_registry_dialog")
-	registry_dialog.open()
-	var repo_edit: LineEdit = registry_dialog.get("_repo_edit")
+
+## Edit the entry: a narrower range, saved to the registry; id and folder stay fixed.
+func _dock_edit() -> void:
+	_select_first_plugin()
+	var edit_button := _find_button(_dock, "Edit")
+	_expect(edit_button != null, "edit action in the detail")
+	if edit_button == null:
+		return
+	edit_button.pressed.emit()
+	await _wait_until(func() -> bool: return _registry_dialog.visible, 5000)
+	var id_edit: LineEdit = _registry_dialog.get("_id_edit")
+	var id_fixed := id_edit.text == "fake_a" and not id_edit.editable
+	_expect(id_fixed, "id fixed while editing")
+	var range_edit: LineEdit = _registry_dialog.get("_range_edit")
+	range_edit.text = "~1.1.0"
+	range_edit.text_changed.emit(range_edit.text)
+	await _screenshot("dock_edit_dialog", _registry_dialog)
+	_registry_dialog.get_ok_button().pressed.emit()
+	await _wait_until(func() -> bool: return not _dock.get("_busy"), 10000)
+	await _dialog_closed(_registry_dialog)
+	var saved_range: String = LoadoutRegistry.load_file(_registry_path)["registry"].get_entry("fake_a").version_range
+	_expect(saved_range == "~1.1.0", "edited range saved to the registry (%s)" % saved_range)
+
+
+## The add dialog with a GitHub repository and with an Asset Store search (canned, no network).
+func _dock_add_dialogs() -> void:
+	_registry_dialog.open()
+	var repo_edit: LineEdit = _registry_dialog.get("_repo_edit")
 	repo_edit.text = "bitwes/Gut"
 	repo_edit.text_changed.emit(repo_edit.text)
-	await _screenshot("dock_add_dialog", registry_dialog)
-	# Asset Library tab with a canned search (no network in this smoke test).
-	registry_dialog.set("assetlib_search", func(_query: String) -> Dictionary:
+	await _screenshot("dock_add_dialog", _registry_dialog)
+	_registry_dialog.set("store_search", func(_query: String) -> Dictionary:
 		return { "ok": true, "error": "", "results": [
-			{ "asset_id": "1709", "title": "Debug Draw 3D", "author": "DmitriySalnikov", "version_string": "1.5.1", "godot_version": "4.5", "category": "Tools" },
-			{ "asset_id": "2101", "title": "Debug Menu", "author": "someone", "version_string": "1.2.0", "godot_version": "4.4", "category": "Tools" },
+			{ "asset": "dmitriysalnikov/debug-draw-3d", "title": "Debug Draw 3D", "author": "DmitriySalnikov" },
+			{ "asset": "someone/debug-menu", "title": "Debug Menu", "author": "someone" },
 		] })
-	var source_option: OptionButton = registry_dialog.get("_source_option")
-	source_option.select(source_option.get_item_index(2))
-	source_option.item_selected.emit(source_option.selected)
-	var query_edit: LineEdit = registry_dialog.get("_query_edit")
-	query_edit.text = "debug draw"
-	await registry_dialog.call("_search")
-	var results: ItemList = registry_dialog.get("_results")
+	_select_source(2)
+	(_registry_dialog.get("_query_edit") as LineEdit).text = "debug draw"
+	await _registry_dialog.call("_search")
+	var results: ItemList = _registry_dialog.get("_results")
 	results.select(0)
 	results.item_selected.emit(0)
-	_expect((registry_dialog.get("_folder_edit") as LineEdit).text == "debug_draw_3d", "folder suggested from the title")
-	await _screenshot("dock_add_assetlib", registry_dialog)
-	registry_dialog.hide()
-	# Cleanup: leave the project and the registry file as they were (no fake_a, no lock).
-	var file := FileAccess.open(registry_path, FileAccess.WRITE)
-	file.store_string(original_registry)
-	file.close()
+	var folder := (_registry_dialog.get("_folder_edit") as LineEdit).text
+	_expect(folder == "debug_draw_3d", "folder suggested from the title (%s)" % folder)
+	await _screenshot("dock_add_store", _registry_dialog)
+	_registry_dialog.hide()
+	await _dialog_closed(_registry_dialog)
 	await _installer.uninstall(_entry)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(LoadoutLockfile.DEFAULT_PATH))
+
+
+## A plugin installed outside Loadout (like from Godot's Asset Store): offered, added, taken over.
+func _dock_new_addon() -> void:
+	_write_text(_registry_path, JSON.stringify({ "schema": 1, "plugins": [] }))
+	await _manager.refresh()
+	_registry_dialog.set("store_search", func(_query: String) -> Dictionary:
+		return { "ok": true, "error": "", "results": [
+			{ "asset": "someone/fake-a", "title": "Fake A", "author": "someone" },
+			{ "asset": "someone/fake-a-extras", "title": "Fake A Extras", "author": "someone" },
+		] })
+	Fs.copy_dir(FIXTURES.path_join("1.0.0"), "res://addons/fake_a")
+	await _installer.editor.scan()
+	var offered: bool = await _wait_until(func() -> bool:
+		return _confirm.visible and _confirm.dialog_text.contains("New plugin Fake A"), 5000)
+	_expect(offered, "new plugin offered after the filesystem change")
+	var listed := _unregistered_folders()
+	_expect(listed == PackedStringArray(["fake_a"]), "new addon listed (%s)" % listed)
+	await _screenshot("dock_new_addon_offer", _confirm)
+	await _screenshot("dock_unregistered")
+	var add_button: Button = _confirm.get_ok_button() if offered else _find_button(_dock, "Add to registry")
+	_expect(add_button != null, "a way to add the new addon")
+	if add_button == null:
+		return
+	add_button.pressed.emit()
+	await _wait_until(func() -> bool: return _registry_dialog.visible, 5000)
+	var picked: String = _registry_dialog.get("_store_asset")
+	_expect(picked == "someone/fake-a", "exact Asset Store name match picked (%s)" % picked)
+	var folder_edit: LineEdit = _registry_dialog.get("_folder_edit")
+	var folder_fixed := folder_edit.text == "fake_a" and not folder_edit.editable
+	_expect(folder_fixed, "folder fixed to the existing one")
+	await _screenshot("dock_add_existing", _registry_dialog)
+	_select_source(1)
+	var path_edit: LineEdit = _registry_dialog.get("_path_edit")
+	path_edit.text = _fixture("1.0.0")
+	path_edit.text_changed.emit(path_edit.text)
+	_expect(folder_edit.text == "fake_a", "local path does not rename the folder")
+	_registry_dialog.get_ok_button().pressed.emit()
+	await _wait_until(func() -> bool: return _status_of("fake_a") == LoadoutManager.Status.OK, 10000)
+	_expect(_status_of("fake_a") == LoadoutManager.Status.OK, "existing addon taken over")
+	_expect(_manager.unregistered.is_empty(), "no longer listed")
+
+
+func _status_of(id: String) -> int:
+	var state := _manager.get_state(id)
+	return state.status if state != null else -1
+
+
+func _unregistered_folders() -> PackedStringArray:
+	var folders: PackedStringArray = []
+	for info: Dictionary in _manager.unregistered:
+		folders.append(info["folder"])
+	return folders
+
+
+func _select_first_plugin() -> void:
+	(_dock.get("_tree") as Tree).get_root().get_first_child().select(0)
+
+
+func _select_source(id: int) -> void:
+	var option: OptionButton = _registry_dialog.get("_source_option")
+	option.select(option.get_item_index(id))
+	option.item_selected.emit(option.selected)
+
+
+## A dialog hides at the end of the frame; opening the next one earlier makes Godot refuse it.
+func _dialog_closed(dialog: Window) -> void:
+	await _wait_until(func() -> bool: return not dialog.visible, 2000)
+	await _tree.process_frame
 
 
 func _run_remote() -> void:
@@ -231,6 +372,22 @@ func _run_self() -> void:
 	_expect(state.lock_entry != null and state.lock_entry.version == gam_version, "lock records %s" % gam_version)
 	_expect(EditorInterface.is_plugin_enabled("loadout") and dock.is_inside_tree(), "Loadout enabled and its dock is up")
 	_write_text(report, "passed %s" % gam_version if _failures.is_empty() else "failed: " + "; ".join(_failures))
+
+
+## Asset Store search through the real dialog and network (read-only request).
+func _run_search() -> void:
+	var dock: Control = _plugin.get_dock()
+	var dialog: ConfirmationDialog = dock.get("_registry_dialog")
+	dialog.open()
+	var option: OptionButton = dialog.get("_source_option")
+	option.select(option.get_item_index(2))
+	option.item_selected.emit(option.selected)
+	(dialog.get("_query_edit") as LineEdit).text = "debug"
+	await dialog.call("_search")
+	var results: ItemList = dialog.get("_results")
+	Log.write("search: %d results, status: %s" % [results.item_count, (dialog.get("_search_status") as Label).text])
+	_expect(results.item_count > 0, "search found something")
+	dialog.hide()
 
 
 func _cfg_version(path: String) -> String:

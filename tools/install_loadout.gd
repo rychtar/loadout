@@ -36,7 +36,10 @@ func _initialize() -> void:
 		Setup.ACTION_INSTALLED:
 			Log.write("Loadout %s installed into %s." % [result["version"], project])
 		Setup.ACTION_UPDATED:
-			Log.write("Loadout in %s updated %s -> %s." % [project, result["previous"], result["version"]])
+			if result["previous"] == result["version"]:
+				Log.write("Loadout %s in %s replaced with the current files (same version number)." % [result["version"], project])
+			else:
+				Log.write("Loadout in %s updated %s -> %s." % [project, result["previous"], result["version"]])
 		Setup.ACTION_UNCHANGED:
 			Log.write("Loadout %s is already in %s, nothing changed." % [result["version"], project])
 	Log.write("Open the project in Godot, Loadout offers the missing global plugins.")
