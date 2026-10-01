@@ -14,7 +14,7 @@ extends RefCounted
 ## Remote sources (needs network; registry with e.g. a GitHub entry, auto_install):
 ##   godot --headless -e --path <project> -- --loadout-registry=<file> --loadout-smoke=remote
 ##   forced update check, install of every registry plugin, running check, uninstall
-## Self-update (GUI or headless; registry has a "gam" entry pointing to a newer Loadout copy):
+## Self-update (GUI or headless; registry has a "loadout" entry pointing to a newer Loadout copy):
 ##   godot -e --path <project> -- --loadout-registry=<file> --loadout-smoke=self
 ##   first run updates Loadout from the dock and the editor restarts itself. Godot relaunches it
 ##   without --headless and without the arguments after "--", so close that editor and run the
@@ -340,9 +340,9 @@ func _run_self() -> void:
 	var manager: LoadoutManager = _plugin.get_manager()
 	var dock: Control = _plugin.get_dock()
 	await manager.refresh(true)
-	var state := manager.get_state("gam")
+	var state := manager.get_state("loadout")
 	if state == null:
-		_failures.append("registry has no gam entry")
+		_failures.append("registry has no loadout entry")
 		return
 	var report := SMOKE_DIR.path_join("self.txt")
 	if state.status == LoadoutManager.Status.UPDATE:
@@ -366,12 +366,12 @@ func _run_self() -> void:
 		_failures.append("editor did not restart after the self-update")
 		return
 	# Second session after the restart.
-	var gam_version := _cfg_version("res://addons/loadout/plugin.cfg")
+	var loadout_version := _cfg_version("res://addons/loadout/plugin.cfg")
 	_expect(state.status == LoadoutManager.Status.OK, "Loadout state after restart: %s" % LoadoutManager.Status.find_key(state.status))
-	_expect(gam_version == state.latest_version, "running Loadout %s is the newest %s" % [gam_version, state.latest_version])
-	_expect(state.lock_entry != null and state.lock_entry.version == gam_version, "lock records %s" % gam_version)
+	_expect(loadout_version == state.latest_version, "running Loadout %s is the newest %s" % [loadout_version, state.latest_version])
+	_expect(state.lock_entry != null and state.lock_entry.version == loadout_version, "lock records %s" % loadout_version)
 	_expect(EditorInterface.is_plugin_enabled("loadout") and dock.is_inside_tree(), "Loadout enabled and its dock is up")
-	_write_text(report, "passed %s" % gam_version if _failures.is_empty() else "failed: " + "; ".join(_failures))
+	_write_text(report, "passed %s" % loadout_version if _failures.is_empty() else "failed: " + "; ".join(_failures))
 
 
 ## Asset Store search through the real dialog and network (read-only request).

@@ -5,6 +5,9 @@ extends RefCounted
 ## Where a plugin comes from. Subclasses may await (network); callers always await the methods.
 ## Only sources/ talks to the network, core/ never does.
 ##
+const Zip := preload("../util/zip.gd")
+const Fs := preload("../util/fs.gd")
+
 ## Remote sources list their releases with list_releases(); LoadoutUpdateChecker caches that list
 ## (once a day, ETag) and puts it into `releases`, which the other methods then use.
 
@@ -70,6 +73,29 @@ func get_plugin_name() -> String:
 ## plugin's folder name inside the package), "warning": String (optional) } where path holds plugin.cfg.
 func fetch(_version: String, _dest_dir: String) -> Dictionary:
 	return { "ok": false, "error": "The source cannot download.", "path": "" }
+
+
+## Shared by the remote sources: saves a downloaded zip, extracts the plugin folder into dest_dir and
+## returns the fetch() result.
+func _save_and_extract(body: PackedByteArray, plugin_folder: String, dest_dir: String) -> Dictionary:
+	var zip_path := dest_dir.trim_suffix("/") + ".zip"
+	DirAccess.make_dir_recursive_absolute(zip_path.get_base_dir())
+	var file := FileAccess.open(zip_path, FileAccess.WRITE)
+	if file == null:
+		return { "ok": false, "error": "Cannot save the zip: %s" % error_string(FileAccess.get_open_error()), "path": "" }
+	file.store_buffer(body)
+	var write_error := file.get_error()
+	file.close()
+	if write_error != OK:
+		DirAccess.remove_absolute(zip_path)
+		return { "ok": false, "error": "Cannot save the zip: %s" % error_string(write_error), "path": "" }
+	var extracted := Zip.extract_plugin(zip_path, plugin_folder, dest_dir)
+	DirAccess.remove_absolute(zip_path)
+	if not extracted["ok"]:
+		Fs.remove_dir(dest_dir)
+		return { "ok": false, "error": extracted["error"], "path": "" }
+	return { "ok": true, "error": "", "path": dest_dir, "package_folder": extracted["source_folder"],
+			"warning": folder_warning(extracted["source_folder"], plugin_folder) }
 
 
 ## Warning when the package keeps the plugin in another folder than the registry entry: plugins

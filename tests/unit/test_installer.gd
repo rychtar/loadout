@@ -248,8 +248,8 @@ func test_installer_stays_in_addons_dir() -> void:
 	check_eq(installer.target_dir(entry), addons.path_join("fake_a"), "target under the configured addons dir")
 
 
-func _gam_package(version: String) -> String:
-	var dir := temp_dir("installer_gam_pkg_" + version)
+func _loadout_package(version: String) -> String:
+	var dir := temp_dir("installer_loadout_pkg_" + version)
 	write_text(dir.path_join("plugin.cfg"), "[plugin]\n\nname=\"Loadout\"\nversion=\"%s\"\nscript=\"plugin.gd\"\n" % version)
 	write_text(dir.path_join("plugin.gd"), "@tool\nextends EditorPlugin\n# %s\n" % version)
 	return dir
@@ -257,26 +257,26 @@ func _gam_package(version: String) -> String:
 
 func test_self_update_replaces_files_without_touching_the_editor() -> void:
 	_setup("self_update")
-	var gam: Registry.Entry = Registry.parse_entry({ "id": "gam", "folder": "loadout", "source": { "type": "local", "path": "/x" } })["entry"]
-	Fs.copy_dir(_gam_package("0.0.1"), addons.path_join("loadout"))
-	write_text(addons.path_join("loadout/plugin.gd.uid"), "uid://gam")
-	source.versions["0.0.2"] = _gam_package("0.0.2")
-	var result: Dictionary = await installer.self_update(gam, source, "0.0.2")
+	var loadout: Registry.Entry = Registry.parse_entry({ "id": "loadout", "folder": "loadout", "source": { "type": "local", "path": "/x" } })["entry"]
+	Fs.copy_dir(_loadout_package("0.0.1"), addons.path_join("loadout"))
+	write_text(addons.path_join("loadout/plugin.gd.uid"), "uid://loadout")
+	source.versions["0.0.2"] = _loadout_package("0.0.2")
+	var result: Dictionary = await installer.self_update(loadout, source, "0.0.2")
 	check(result["ok"], "ok: %s" % result["error"])
 	check(result["restart_required"], "editor restart required")
-	check_eq(installer.installed_version(gam), "0.0.2", "new files on disk")
+	check_eq(installer.installed_version(loadout), "0.0.2", "new files on disk")
 	check(editor.calls.is_empty(), "never disabled, scanned or enabled (it would stop Loadout itself)")
-	check(FileAccess.file_exists(root.path_join("backup/gam/0.0.1/plugin.cfg")), "backup of the running version")
-	check_eq(FileAccess.get_file_as_string(addons.path_join("loadout/plugin.gd.uid")), "uid://gam", "uid preserved")
+	check(FileAccess.file_exists(root.path_join("backup/loadout/0.0.1/plugin.cfg")), "backup of the running version")
+	check_eq(FileAccess.get_file_as_string(addons.path_join("loadout/plugin.gd.uid")), "uid://loadout", "uid preserved")
 	check_eq(result["hash"], Fs.hash_dir(addons.path_join("loadout")), "hash")
-	check_eq(events, ["updated gam 0.0.1 0.0.2"] as Array[String], "signal")
+	check_eq(events, ["updated loadout 0.0.1 0.0.2"] as Array[String], "signal")
 
 
 func test_self_update_failed_download_changes_nothing() -> void:
 	_setup("self_update_fail")
-	var gam: Registry.Entry = Registry.parse_entry({ "id": "gam", "folder": "loadout", "source": { "type": "local", "path": "/x" } })["entry"]
-	Fs.copy_dir(_gam_package("0.0.1"), addons.path_join("loadout"))
+	var loadout: Registry.Entry = Registry.parse_entry({ "id": "loadout", "folder": "loadout", "source": { "type": "local", "path": "/x" } })["entry"]
+	Fs.copy_dir(_loadout_package("0.0.1"), addons.path_join("loadout"))
 	var before := Fs.hash_dir(addons.path_join("loadout"))
-	var result: Dictionary = await installer.self_update(gam, source, "9.9.9")
+	var result: Dictionary = await installer.self_update(loadout, source, "9.9.9")
 	check(not result["ok"], "fails")
 	check_eq(Fs.hash_dir(addons.path_join("loadout")), before, "untouched")

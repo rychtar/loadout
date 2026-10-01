@@ -55,6 +55,20 @@ func test_lists_releases() -> void:
 	check(result["releases"][2]["prerelease"], "prerelease flag")
 
 
+func test_tag_versions() -> void:
+	_setup()
+	http.respond_json(RELEASES_URL, [
+		_release("godot4-1.2.3"), _release("gdscript2-1.0.0"), _release("name-v2.1.0-rc.1"),
+		_release("release_3.0.0"), _release("v1.2.3.4"),
+	])
+	var result := await _list()
+	var versions: PackedStringArray = []
+	for release: Dictionary in result["releases"]:
+		versions.append(release["version"])
+	check_eq(versions, PackedStringArray(["1.2.3", "1.0.0", "2.1.0-rc.1", "3.0.0"]),
+			"digits in the tag prefix are not part of the version, a 4-part tag is skipped")
+
+
 func test_request_headers() -> void:
 	_setup()
 	http.respond_json(RELEASES_URL, [])

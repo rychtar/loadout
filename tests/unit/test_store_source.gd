@@ -84,7 +84,8 @@ func test_fetch_paid_or_gone() -> void:
 func test_describe_and_cache_key() -> void:
 	_setup()
 	check_eq(source.describe(), "Asset Store · rumys/fake-a", "describe")
-	check_eq(source.cache_key(), "store:rumys/fake-a", "cache key")
+	check_eq(source.cache_key(), "store:rumys/fake-a@4.7", "cache key depends on the Godot version")
+	check_eq(StoreSource.new("rumys/fake-a", "fake_a", http).cache_key(), "store:rumys/fake-a", "no version, no suffix")
 	check(source.is_remote(), "remote")
 
 

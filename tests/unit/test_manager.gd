@@ -179,6 +179,18 @@ func test_modified_and_adopt() -> void:
 	check_eq(_saved_lock().get_entry("fake_a").folder_hash, Fs.hash_dir(addons.path_join("fake_a")), "new hash locked")
 
 
+func test_adopt_plugin_without_valid_version() -> void:
+	_setup("adopt_no_version", [_local("fake_a", "1.0.0")])
+	Fs.copy_dir(FIXTURES.path_join("1.0.0"), addons.path_join("fake_a"))
+	write_text(addons.path_join("fake_a/plugin.cfg"), "[plugin]\nname=\"Fake A\"\nversion=\"beta\"\nscript=\"plugin.gd\"\n")
+	await manager.refresh()
+	check_eq(await manager.adopt("fake_a"), OK, "adopt")
+	check_eq(_saved_lock().get_entry("fake_a").version, "0.0.0", "a lockable version is recorded")
+	await manager.refresh()
+	check(manager.warnings.is_empty(), "the lock entry is readable: %s" % [manager.warnings])
+	check(manager.get_state("fake_a").lock_entry != null, "still managed after reload")
+
+
 func test_force_overwrite_modified() -> void:
 	_setup("force", [_local("fake_a", "1.0.0")])
 	await manager.refresh()
@@ -374,47 +386,47 @@ func test_install_updates() -> void:
 	check_eq(_status("fake_b"), Manager.Status.PINNED, "b untouched")
 
 
-func _gam_package(version: String) -> String:
-	var dir := temp_dir("manager_gam_pkg_" + version)
+func _loadout_package(version: String) -> String:
+	var dir := temp_dir("manager_loadout_pkg_" + version)
 	write_text(dir.path_join("plugin.cfg"), "[plugin]\n\nname=\"Loadout\"\nversion=\"%s\"\nscript=\"plugin.gd\"\n" % version)
 	write_text(dir.path_join("plugin.gd"), "@tool\nextends EditorPlugin\n# %s\n" % version)
 	return dir
 
 
-func _setup_gam(name: String) -> FakeSource:
-	_setup(name, [{ "id": "gam", "folder": "loadout", "source": { "type": "local", "path": "/gam" } }])
-	Fs.copy_dir(_gam_package("0.0.1"), addons.path_join("loadout"))
-	var source := FakeSource.new({ "0.0.1": _gam_package("0.0.1") })
-	fake_sources["gam"] = source
+func _setup_loadout(name: String) -> FakeSource:
+	_setup(name, [{ "id": "loadout", "folder": "loadout", "source": { "type": "local", "path": "/loadout" } }])
+	Fs.copy_dir(_loadout_package("0.0.1"), addons.path_join("loadout"))
+	var source := FakeSource.new({ "0.0.1": _loadout_package("0.0.1") })
+	fake_sources["loadout"] = source
 	return source
 
 
-func test_gam_is_managed_without_lock_entry() -> void:
-	var source := _setup_gam("self_state")
+func test_loadout_is_managed_without_lock_entry() -> void:
+	var source := _setup_loadout("self_state")
 	await manager.refresh()
-	check_eq(_status("gam"), Manager.Status.OK, "Loadout copied by the install script is not 'unmanaged'")
-	source.versions["0.0.2"] = _gam_package("0.0.2")
+	check_eq(_status("loadout"), Manager.Status.OK, "Loadout copied by the install script is not 'unmanaged'")
+	source.versions["0.0.2"] = _loadout_package("0.0.2")
 	await manager.refresh(true)
-	check_eq(_status("gam"), Manager.Status.UPDATE, "self update offered")
+	check_eq(_status("loadout"), Manager.Status.UPDATE, "self update offered")
 
 
 func test_self_update_requests_restart() -> void:
-	var source := _setup_gam("self_update")
-	source.versions["0.0.2"] = _gam_package("0.0.2")
+	var source := _setup_loadout("self_update")
+	source.versions["0.0.2"] = _loadout_package("0.0.2")
 	await manager.refresh()
 	var restarts := [0]
 	manager.restart_required.connect(func() -> void: restarts[0] += 1)
-	var result: Dictionary = await manager.install("gam")
+	var result: Dictionary = await manager.install("loadout")
 	check(result["ok"], "ok: %s" % result["error"])
 	check_eq(restarts[0], 1, "restart requested")
 	check(editor.calls.is_empty(), "Loadout never disabled itself")
-	check_eq(_saved_lock().get_entry("gam").version, "0.0.2", "lock updated before the restart")
+	check_eq(_saved_lock().get_entry("loadout").version, "0.0.2", "lock updated before the restart")
 
 
-func test_gam_cannot_be_uninstalled() -> void:
-	_setup_gam("self_uninstall")
+func test_loadout_cannot_be_uninstalled() -> void:
+	_setup_loadout("self_uninstall")
 	await manager.refresh()
-	var result: Dictionary = await manager.uninstall("gam")
+	var result: Dictionary = await manager.uninstall("loadout")
 	check(not result["ok"], "refused")
 	check(DirAccess.dir_exists_absolute(addons.path_join("loadout")), "still there")
 
@@ -468,7 +480,7 @@ func _unregistered_folders() -> PackedStringArray:
 func test_lists_project_addons_not_in_the_registry() -> void:
 	_setup("unregistered", [_local("fake_a", "1.0.0")])
 	Fs.copy_dir(FIXTURES.path_join("1.0.0"), addons.path_join("existing"))
-	Fs.copy_dir(_gam_package("0.0.1"), addons.path_join("loadout"))
+	Fs.copy_dir(_loadout_package("0.0.1"), addons.path_join("loadout"))
 	DirAccess.make_dir_recursive_absolute(addons.path_join("no_plugin_cfg"))
 	await manager.refresh()
 	check_eq(_unregistered_folders(), PackedStringArray(["existing"]), "only plugins Loadout does not know")
@@ -527,12 +539,12 @@ func test_detects_addons_added_after_start() -> void:
 	check_eq(_unregistered_folders(), PackedStringArray(["before_start", "from_store"]), "listed in the dock section")
 
 
-func test_plugins_installed_by_gam_are_not_announced() -> void:
-	_setup("detect_gam", [_local("fake_a", "1.0.0")])
+func test_plugins_installed_by_loadout_are_not_announced() -> void:
+	_setup("detect_loadout", [_local("fake_a", "1.0.0")])
 	await manager.refresh()
 	await manager.install_missing()
 	check(manager.detect_new_addons().is_empty(), "registered plugin installed by Loadout")
-	Fs.copy_dir(_gam_package("0.0.2"), addons.path_join("loadout"))
+	Fs.copy_dir(_loadout_package("0.0.2"), addons.path_join("loadout"))
 	DirAccess.make_dir_recursive_absolute(addons.path_join("not_a_plugin"))
 	check(manager.detect_new_addons().is_empty(), "Loadout itself and folders without plugin.cfg ignored")
 

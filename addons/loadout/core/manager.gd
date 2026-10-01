@@ -324,7 +324,7 @@ func adopt(id: String) -> Error:
 	var dir := installer.target_dir(state.entry)
 	if not DirAccess.dir_exists_absolute(dir):
 		return ERR_DOES_NOT_EXIST
-	lockfile.set_installed(id, installer.installed_version(state.entry), Fs.hash_dir(dir), _today())
+	lockfile.set_installed(id, _lockable_version(state.entry), Fs.hash_dir(dir), _today())
 	return await _save_and_update(id)
 
 
@@ -394,7 +394,7 @@ func add_registry_entry(data: Dictionary, take_over: bool = false) -> String:
 	var entry := registry.get_entry(str(data.get("id", "")))
 	var dir := installer.target_dir(entry)
 	if take_over and _lock_ok and DirAccess.dir_exists_absolute(dir) and lockfile.get_entry(entry.id) == null:
-		lockfile.set_installed(entry.id, installer.installed_version(entry), Fs.hash_dir(dir), _today())
+		lockfile.set_installed(entry.id, _lockable_version(entry), Fs.hash_dir(dir), _today())
 		_save_lock()
 	await refresh()
 	return ""
@@ -451,7 +451,8 @@ func set_registry_folder(id: String, folder: String) -> String:
 	if err != OK:
 		entry.folder = previous
 		return "Saving the registry failed: %s" % error_string(err)
-	await refresh()
+	# Cached download links were picked for the old folder name.
+	await refresh(true)
 	return ""
 
 
@@ -601,6 +602,13 @@ func _scan_unregistered() -> Array[Dictionary]:
 		})
 	found.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a["name"].naturalnocasecmp_to(b["name"]) < 0)
 	return found
+
+
+## Version of the files in the project for the lock. A plugin.cfg without a valid version would
+## make the lock entry unreadable (and silently dropped), so it is recorded as 0.0.0.
+func _lockable_version(entry: LoadoutRegistry.Entry) -> String:
+	var version := installer.installed_version(entry)
+	return version if LoadoutVersion.parse(version) != null else "0.0.0"
 
 
 func _is_modified(state: PluginState) -> bool:

@@ -319,10 +319,10 @@ func _add_actions(state: LoadoutManager.PluginState) -> void:
 			_action("Stop ignoring", func() -> Error: return await manager.set_ignored(id, false))
 		Status.UPDATE:
 			_action("Update to %s…" % target, func() -> void: _confirm_update(state), true)
-			_action("Pin to %s" % state.installed_version, func() -> Error: return await manager.set_pinned(id, true))
+			_pin_action(state)
 			_remove_action(state)
 		Status.OK, Status.UNVERIFIED:
-			_action("Pin to %s" % state.installed_version, func() -> Error: return await manager.set_pinned(id, true))
+			_pin_action(state)
 			_remove_action(state)
 		Status.PINNED:
 			_action("Unpin", func() -> Error: return await manager.set_pinned(id, false))
@@ -351,7 +351,7 @@ func _add_actions(state: LoadoutManager.PluginState) -> void:
 func _confirm_update(state: LoadoutManager.PluginState) -> void:
 	var backup := "user://loadout_backup/%s/%s/" % [state.id, state.installed_version]
 	if state.entry.folder == LoadoutManager.SELF_FOLDER:
-		_ask("Update Loadout %s → %s?%s\n\nGAM replaces its files (backup in %s) and the editor restarts right away. Unsaved scenes are saved before the restart."
+		_ask("Update Loadout %s → %s?%s\n\nLoadout replaces its files (backup in %s) and the editor restarts right away. Unsaved scenes are saved before the restart."
 				% [state.installed_version, state.target_version, _notes_text(state), backup],
 				"Update and restart", func() -> Dictionary: return await manager.install(state.id), "Not now")
 		return
@@ -412,9 +412,15 @@ func _confirm_update_all() -> void:
 func _check_updates() -> Dictionary:
 	await manager.refresh(true)
 	var updates := manager.update_ids()
-	if updates.is_empty() and manager.errors.is_empty():
-		return { "ok": true, "info": "All global plugins are up to date." }
-	return { "ok": true }
+	if not updates.is_empty() or not manager.errors.is_empty():
+		return { "ok": true }
+	var unchecked: PackedStringArray = []
+	for state in manager.states:
+		if state.status == Status.UNVERIFIED or state.warning != "":
+			unchecked.append(state.display_name)
+	if not unchecked.is_empty():
+		return { "ok": true, "info": "No updates found, but some sources could not be checked right now: %s." % ", ".join(unchecked) }
+	return { "ok": true, "info": "All global plugins are up to date." }
 
 
 func _install_updates() -> Dictionary:
@@ -429,7 +435,17 @@ func _overwrite_action(state: LoadoutManager.PluginState) -> void:
 				"Overwrite", func() -> Dictionary: return await manager.install(state.id, true)))
 
 
+## A pin lives in the lock, so a plugin without a lock entry (Loadout itself) cannot be pinned.
+func _pin_action(state: LoadoutManager.PluginState) -> void:
+	if state.lock_entry == null:
+		return
+	var id := state.id
+	_action("Pin to %s" % state.installed_version, func() -> Error: return await manager.set_pinned(id, true))
+
+
 func _remove_action(state: LoadoutManager.PluginState) -> void:
+	if state.entry != null and state.entry.folder == LoadoutManager.SELF_FOLDER:
+		return
 	_action("Remove from project…", func() -> void:
 		_ask("Remove %s from this project? The folder is backed up to user://loadout_backup/%s/ and Loadout stops installing it here." % [state.display_name, state.id],
 				"Remove", func() -> Dictionary: return await manager.uninstall(state.id)))

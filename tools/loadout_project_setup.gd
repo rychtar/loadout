@@ -6,7 +6,7 @@ extends RefCounted
 
 const Fs := preload("res://addons/loadout/util/fs.gd")
 
-const GAM_FOLDER := "loadout"
+const LOADOUT_FOLDER := "loadout"
 const PLUGIN_CFG := "res://addons/loadout/plugin.cfg"
 const SECTION := "[editor_plugins]"
 const ENABLED_KEY := "enabled="
@@ -16,10 +16,10 @@ const ACTION_UPDATED := "updated"
 const ACTION_UNCHANGED := "unchanged"
 
 
-## gam_dir: the Loadout folder to copy, project_dir: folder with project.godot (absolute paths).
+## loadout_dir: the Loadout folder to copy, project_dir: folder with project.godot (absolute paths).
 ## Returns { "ok", "error", "action", "version", "previous" }.
-static func install(gam_dir: String, project_dir: String, force: bool = false) -> Dictionary:
-	var result := { "ok": false, "error": "", "action": "", "version": _version(gam_dir), "previous": "" }
+static func install(loadout_dir: String, project_dir: String, force: bool = false) -> Dictionary:
+	var result := { "ok": false, "error": "", "action": "", "version": _version(loadout_dir), "previous": "" }
 	var project_file := project_dir.path_join("project.godot")
 	if not FileAccess.file_exists(project_file):
 		result["error"] = "Folder %s has no project.godot." % project_dir
@@ -29,10 +29,10 @@ static func install(gam_dir: String, project_dir: String, force: bool = false) -
 		result["error"] = "%s is not a Godot 4 project (config_version=5 missing)." % project_file
 		return result
 	if result["version"] == "":
-		result["error"] = "Folder %s has no Loadout plugin.cfg." % gam_dir
+		result["error"] = "Folder %s has no Loadout plugin.cfg." % loadout_dir
 		return result
-	var target := project_dir.path_join("addons").path_join(GAM_FOLDER)
-	if _same_dir(gam_dir, target):
+	var target := project_dir.path_join("addons").path_join(LOADOUT_FOLDER)
+	if _same_dir(loadout_dir, target):
 		result["error"] = "Source and target are the same folder."
 		return result
 	var enabled := with_plugin_enabled(project_text, PLUGIN_CFG)
@@ -42,7 +42,7 @@ static func install(gam_dir: String, project_dir: String, force: bool = false) -
 
 	result["previous"] = _version(target)
 	if DirAccess.dir_exists_absolute(target):
-		if result["previous"] == result["version"] and Fs.hash_dir(target) == Fs.hash_dir(gam_dir):
+		if result["previous"] == result["version"] and Fs.hash_dir(target) == Fs.hash_dir(loadout_dir):
 			result["action"] = ACTION_UNCHANGED
 		elif not force:
 			result["error"] = "The project already has Loadout %s. Replace it with %s using --force (close the project's editor first)." % [
@@ -58,7 +58,7 @@ static func install(gam_dir: String, project_dir: String, force: bool = false) -
 		result["action"] = ACTION_INSTALLED
 
 	if result["action"] != ACTION_UNCHANGED:
-		var err := Fs.copy_dir(gam_dir, target, Fs.DEFAULT_EXCLUDE)
+		var err := Fs.copy_dir(loadout_dir, target, Fs.DEFAULT_EXCLUDE)
 		if err != OK:
 			result["error"] = "Copying to %s failed: %s" % [target, error_string(err)]
 			return result

@@ -7,9 +7,6 @@ extends LoadoutSource
 ## a few minutes, so they are never cached: fetch() asks for the release list again right before
 ## downloading. Paid assets (no public download link) are not supported.
 
-const Zip := preload("../util/zip.gd")
-const Fs := preload("../util/fs.gd")
-
 const API := "https://store.godotengine.org/api/v1"
 const ASSET_PAGE := "https://store.godotengine.org/asset/%s/"
 const USER_AGENT := "Loadout (Godot editor plugin)"
@@ -38,8 +35,9 @@ func is_remote() -> bool:
 	return true
 
 
+## The release list depends on the Godot version (compatibility filter).
 func cache_key() -> String:
-	return "store:%s" % asset
+	return "store:%s" % asset if _godot_version == "" else "store:%s@%s" % [asset, _godot_version]
 
 
 func list_releases(_etag: String = "") -> Dictionary:
@@ -96,20 +94,7 @@ func fetch(version: String, dest_dir: String) -> Dictionary:
 		return { "ok": false, "error": response["error"], "path": "" }
 	if response["code"] != 200:
 		return { "ok": false, "error": "Download of %s %s failed (code %d)." % [asset, version, response["code"]], "path": "" }
-	var zip_path := dest_dir.trim_suffix("/") + ".zip"
-	DirAccess.make_dir_recursive_absolute(zip_path.get_base_dir())
-	var file := FileAccess.open(zip_path, FileAccess.WRITE)
-	if file == null:
-		return { "ok": false, "error": "Cannot save the zip: %s" % error_string(FileAccess.get_open_error()), "path": "" }
-	file.store_buffer(response["body"])
-	file.close()
-	var extracted := Zip.extract_plugin(zip_path, folder, dest_dir)
-	DirAccess.remove_absolute(zip_path)
-	if not extracted["ok"]:
-		Fs.remove_dir(dest_dir)
-		return { "ok": false, "error": extracted["error"], "path": "" }
-	return { "ok": true, "error": "", "path": dest_dir, "package_folder": extracted["source_folder"],
-			"warning": folder_warning(extracted["source_folder"], folder) }
+	return _save_and_extract(response["body"], folder, dest_dir)
 
 
 ## Searches free add-ons for the given Godot version ("4.7"). Returns { "ok", "error",

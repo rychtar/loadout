@@ -8,14 +8,12 @@ extends LoadoutSource
 ## count against the rate limit (without one it does, the daily check keeps it low). An optional token (Editor Settings) raises the limit; it is sent
 ## only to api.github.com when listing releases, never with downloads (they redirect to other hosts).
 
-const Zip := preload("../util/zip.gd")
-const Fs := preload("../util/fs.gd")
-
 const API := "https://api.github.com"
 const PER_PAGE := 50
 const MAX_NOTES := 4000
 const USER_AGENT := "Loadout (Godot editor plugin)"
-const _TAG_VERSION_PATTERN := "(\\d+(?:\\.\\d+){0,2}(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?)$"
+## The version is the end of the tag, after the start or a separator (so "godot4-1.2.3" is 1.2.3, not 4.0.0-1.2.3).
+const _TAG_VERSION_PATTERN := "(?:^|[-_/\\s])[vV]?(\\d+(?:\\.\\d+){0,2}(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?)$"
 
 var repo: String
 var folder: String
@@ -87,20 +85,7 @@ func fetch(version: String, dest_dir: String) -> Dictionary:
 		return { "ok": false, "error": response["error"], "path": "" }
 	if response["code"] != 200:
 		return { "ok": false, "error": "Download of %s failed: %s" % [url, _status_error(response["code"], response["headers"])], "path": "" }
-	var zip_path := dest_dir.trim_suffix("/") + ".zip"
-	DirAccess.make_dir_recursive_absolute(zip_path.get_base_dir())
-	var file := FileAccess.open(zip_path, FileAccess.WRITE)
-	if file == null:
-		return { "ok": false, "error": "Cannot save the zip: %s" % error_string(FileAccess.get_open_error()), "path": "" }
-	file.store_buffer(response["body"])
-	file.close()
-	var extracted := Zip.extract_plugin(zip_path, folder, dest_dir)
-	DirAccess.remove_absolute(zip_path)
-	if not extracted["ok"]:
-		Fs.remove_dir(dest_dir)
-		return { "ok": false, "error": extracted["error"], "path": "" }
-	return { "ok": true, "error": "", "path": dest_dir, "package_folder": extracted["source_folder"],
-			"warning": folder_warning(extracted["source_folder"], folder) }
+	return _save_and_extract(response["body"], folder, dest_dir)
 
 
 func _parse_release(item: Dictionary) -> Dictionary:

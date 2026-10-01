@@ -8,7 +8,7 @@ extends SceneTree
 const Setup := preload("res://tools/loadout_project_setup.gd")
 const Log := preload("res://addons/loadout/util/log.gd")
 
-const GAM_DIR := "res://addons/loadout"
+const LOADOUT_DIR := "res://addons/loadout"
 
 
 func _initialize() -> void:
@@ -27,7 +27,7 @@ func _initialize() -> void:
 		project = OS.get_environment("PWD").path_join(project)
 	project = project.simplify_path()
 
-	var result := Setup.install(ProjectSettings.globalize_path(GAM_DIR), project, force)
+	var result := Setup.install(ProjectSettings.globalize_path(LOADOUT_DIR), project, force)
 	if not result["ok"]:
 		Log.write(result["error"], Log.Level.ERROR)
 		quit(1)

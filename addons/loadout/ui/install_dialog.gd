@@ -75,6 +75,7 @@ func _on_confirmed() -> void:
 	var ignore: PackedStringArray = []
 	if _ignore_check.button_pressed:
 		for id in _checks:
-			if not selected.has(id):
+			# Rows that cannot be installed right now (offline, source error) are not a choice of the user.
+			if not selected.has(id) and not _checks[id].disabled:
 				ignore.append(id)
 	install_chosen.emit(selected, ignore)

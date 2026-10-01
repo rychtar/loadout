@@ -4,7 +4,7 @@
 # Godot is taken from $GODOT, then `godot` in PATH, then /Applications/Godot.app.
 set -e
 
-GAM_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+LOADOUT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if [ -z "$1" ]; then
 	echo "Usage: $0 <project folder> [--force]" >&2
 	exit 2
@@ -27,4 +27,4 @@ if [ -z "$GODOT" ]; then
 	exit 2
 fi
 
-exec "$GODOT" --headless --path "$GAM_ROOT" --script res://tools/install_loadout.gd -- "$PROJECT" "$@"
+exec "$GODOT" --headless --path "$LOADOUT_ROOT" --script res://tools/install_loadout.gd -- "$PROJECT" "$@"

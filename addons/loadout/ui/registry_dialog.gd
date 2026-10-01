@@ -111,7 +111,7 @@ func _init() -> void:
 	_local_box.add_child(path_row)
 	_path_edit = LineEdit.new()
 	_path_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_path_edit.placeholder_text = "/cesta/k/addons/muj_plugin"
+	_path_edit.placeholder_text = "/path/to/addons/my_plugin"
 	_path_edit.text_changed.connect(func(_text: String) -> void: _update_from_path())
 	path_row.add_child(_path_edit)
 	var browse := Button.new()

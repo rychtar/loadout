@@ -2,8 +2,6 @@ extends LoadoutSource
 ## Source backed by fixture folders: { "1.0.0": "res://tests/fixtures/addons/fake_a/1.0.0", ... }.
 ## Acts like a remote source (cached by the update checker) when remote is true.
 
-const Fs := preload("res://addons/loadout/util/fs.gd")
-
 var versions: Dictionary[String, String] = {}
 var remote := false
 var fetched: PackedStringArray = []

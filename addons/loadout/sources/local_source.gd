@@ -5,8 +5,6 @@ extends LoadoutSource
 ## Plugin folder on this machine (absolute path to the folder with plugin.cfg).
 ## It only offers the version currently in its plugin.cfg.
 
-const Fs := preload("../util/fs.gd")
-
 var path: String
 
 
