@@ -6,7 +6,7 @@ const SAMPLE := """{
 	"schema": 1,
 	"plugins": [
 		{ "id": "gut", "folder": "gut", "source": { "type": "github", "repo": "bitwes/Gut" }, "range": "^9.0.0", "auto_install": true },
-		{ "id": "moje_utils", "folder": "moje_utils", "source": { "type": "local", "path": "D:/godot/addons/moje_utils" }, "auto_install": true }
+		{ "id": "my_utils", "folder": "my_utils", "source": { "type": "local", "path": "D:/godot/addons/my_utils" }, "auto_install": true }
 	]
 }"""
 
@@ -35,7 +35,7 @@ func test_parse_sample() -> void:
 		check_eq(gut.source, { "type": "github", "repo": "bitwes/Gut" }, "source")
 		check_eq(gut.version_range, "^9.0.0", "range")
 		check_eq(gut.auto_install, true, "auto_install")
-	var local := registry.get_entry("moje_utils")
+	var local := registry.get_entry("my_utils")
 	check(local != null and local.version_range == "*", "missing range means any version")
 	check(registry.warnings.is_empty(), "no warnings")
 
@@ -180,3 +180,43 @@ func test_store_sources() -> void:
 	check_eq(registry.get_entry("a").source, { "type": "store", "asset": "rumys/gdscript-templates" }, "publisher/slug")
 	check(registry.get_entry("b") != null and registry.get_entry("b").source["asset"] == "rumys/gdscript-templates", "store URL normalized")
 	check(registry.get_entry("c") == null and registry.get_entry("d") == null, "invalid ones skipped")
+
+
+func test_update_entry_keeps_id_and_folder() -> void:
+	var registry := _from_entries([_entry({ "range": "^1.0.0" })])
+	var error := registry.update_entry("a", { "id": "other", "folder": "other",
+			"source": { "type": "github", "repo": "owner/name" }, "range": "~2.1.0", "auto_install": false })
+	check_eq(error, "", "updated")
+	var entry := registry.get_entry("a")
+	check_eq(entry.folder, "a", "folder stays")
+	check_eq(entry.source, { "type": "github", "repo": "owner/name" }, "source replaced")
+	check_eq(entry.version_range, "~2.1.0", "range replaced")
+	check_eq(entry.auto_install, false, "auto_install replaced")
+	check(registry.get_entry("other") == null, "id cannot change")
+
+
+func test_update_entry_rejects_invalid_data_and_keeps_the_entry() -> void:
+	var registry := _from_entries([_entry({})])
+	check(registry.update_entry("a", { "source": { "type": "ftp" } }) != "", "invalid source refused")
+	check(registry.update_entry("a", { "source": { "type": "local", "path": "/x" }, "range": "nonsense" }) != "", "invalid range refused")
+	check_eq(registry.get_entry("a").source.get("path"), "/plugins/a", "entry unchanged")
+	check(registry.update_entry("missing", {}) != "", "unknown id")
+
+
+func test_set_folder() -> void:
+	var registry := _from_entries([_entry({}), _entry({ "id": "b", "folder": "b" })])
+	check_eq(registry.set_folder("a", "renamed"), "", "changed")
+	check_eq(registry.get_entry("a").folder, "renamed", "folder")
+	check(registry.set_folder("a", "B") != "", "folder of another entry (any case) refused")
+	check(registry.set_folder("a", "../outside") != "", "invalid folder refused")
+	check_eq(registry.get_entry("a").folder, "renamed", "unchanged after refusals")
+
+
+func test_merge_adds_only_new_ids() -> void:
+	var registry := _from_entries([_entry({}), _entry({ "id": "e", "folder": "d" })])
+	var other := _from_entries([_entry({}), _entry({ "id": "c", "folder": "c" }), _entry({ "id": "d", "folder": "d" })])
+	var summary := registry.merge(other)
+	check_eq(summary["added"], PackedStringArray(["c"]), "new id added")
+	check(summary["skipped"].has("a"), "existing id skipped")
+	check(summary["skipped"].has("d"), "folder clash skipped")
+	check_eq(registry.entries.size(), 3, "entries")

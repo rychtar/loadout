@@ -8,6 +8,8 @@ extends RefCounted
 const Zip := preload("../util/zip.gd")
 const Fs := preload("../util/fs.gd")
 
+const USER_AGENT := "Loadout (Godot editor plugin)"
+
 ## Remote sources list their releases with list_releases(); LoadoutUpdateChecker caches that list
 ## (once a day, ETag) and puts it into `releases`, which the other methods then use.
 
@@ -73,6 +75,11 @@ func get_plugin_name() -> String:
 ## plugin's folder name inside the package), "warning": String (optional) } where path holds plugin.cfg.
 func fetch(_version: String, _dest_dir: String) -> Dictionary:
 	return { "ok": false, "error": "The source cannot download.", "path": "" }
+
+
+## Headers every request to a remote source carries.
+static func default_headers() -> PackedStringArray:
+	return PackedStringArray(["User-Agent: %s" % USER_AGENT])
 
 
 ## Shared by the remote sources: saves a downloaded zip, extracts the plugin folder into dest_dir and

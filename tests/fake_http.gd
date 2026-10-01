@@ -15,7 +15,8 @@ func respond_json(url: String, data: Variant, headers: Dictionary = {}, code: in
 	responses[url] = { "code": code, "headers": headers, "body": JSON.stringify(data) }
 
 
-func get_request(url: String, headers: PackedStringArray = []) -> Dictionary:
+## Replaces the transport only, so redirect handling of LoadoutHttp.get_request() runs for real.
+func _request_once(url: String, headers: PackedStringArray) -> Dictionary:
 	requests.append({ "url": url, "headers": headers })
 	var refused := check_url(url)
 	if refused != "":

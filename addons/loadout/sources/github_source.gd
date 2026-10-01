@@ -11,9 +11,10 @@ extends LoadoutSource
 const API := "https://api.github.com"
 const PER_PAGE := 50
 const MAX_NOTES := 4000
-const USER_AGENT := "Loadout (Godot editor plugin)"
 ## The version is the end of the tag, after the start or a separator (so "godot4-1.2.3" is 1.2.3, not 4.0.0-1.2.3).
 const _TAG_VERSION_PATTERN := "(?:^|[-_/\\s])[vV]?(\\d+(?:\\.\\d+){0,2}(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?)$"
+
+static var _tag_regex: RegEx
 
 var repo: String
 var folder: String
@@ -46,7 +47,7 @@ func list_releases(etag: String = "") -> Dictionary:
 	var headers := _api_headers()
 	if etag != "":
 		headers.append("If-None-Match: %s" % etag)
-	var response: Dictionary = await _http.get_request("%s/repos/%s/releases?per_page=%d" % [API, repo, PER_PAGE], headers)
+	var response: Dictionary = await _http.get_json("%s/repos/%s/releases?per_page=%d" % [API, repo, PER_PAGE], headers)
 	if not response["ok"]:
 		result["error"] = response["error"]
 		return result
@@ -59,7 +60,7 @@ func list_releases(etag: String = "") -> Dictionary:
 	if code != 200:
 		result["error"] = _status_error(code, response_headers)
 		return result
-	var data: Variant = JSON.parse_string((response["body"] as PackedByteArray).get_string_from_utf8())
+	var data: Variant = response["data"]
 	if typeof(data) != TYPE_ARRAY:
 		result["error"] = "Unexpected GitHub answer for %s." % repo
 		return result
@@ -80,7 +81,7 @@ func fetch(version: String, dest_dir: String) -> Dictionary:
 	if release.is_empty():
 		return { "ok": false, "error": "Release %s of %s is unknown, check for updates." % [version, repo], "path": "" }
 	var url := str(release.get("download_url", ""))
-	var response: Dictionary = await _http.get_request(url, PackedStringArray(["User-Agent: %s" % USER_AGENT]))
+	var response: Dictionary = await _http.get_request(url, default_headers())
 	if not response["ok"]:
 		return { "ok": false, "error": response["error"], "path": "" }
 	if response["code"] != 200:
@@ -92,7 +93,9 @@ func _parse_release(item: Dictionary) -> Dictionary:
 	if item.get("draft", false):
 		return {}
 	var tag := str(item.get("tag_name", ""))
-	var found := RegEx.create_from_string(_TAG_VERSION_PATTERN).search(tag)
+	if _tag_regex == null:
+		_tag_regex = RegEx.create_from_string(_TAG_VERSION_PATTERN)
+	var found := _tag_regex.search(tag)
 	var version := LoadoutVersion.parse(found.get_string(1)) if found != null else null
 	if version == null:
 		return {}
@@ -124,11 +127,8 @@ func _package_url(item: Dictionary) -> String:
 
 
 func _api_headers() -> PackedStringArray:
-	var headers := PackedStringArray([
-		"User-Agent: %s" % USER_AGENT,
-		"Accept: application/vnd.github+json",
-		"X-GitHub-Api-Version: 2022-11-28",
-	])
+	var headers := default_headers()
+	headers.append_array(["Accept: application/vnd.github+json", "X-GitHub-Api-Version: 2022-11-28"])
 	var token := str(_token_provider.call()).strip_edges() if _token_provider.is_valid() else ""
 	if token != "":
 		headers.append("Authorization: Bearer %s" % token)

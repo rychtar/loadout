@@ -10,6 +10,7 @@ const Log := preload("../util/log.gd")
 
 ## Loadout's own folder: it can be updated (installer.self_update + editor restart), never removed.
 const SELF_FOLDER := "loadout"
+const REGISTRY_UNREADABLE := "The registry cannot be read, nothing changed."
 
 ## Emitted after refresh() and after every action, the dock rebuilds from `states`.
 signal states_changed()
@@ -209,18 +210,10 @@ func _install_all(ids: PackedStringArray) -> Dictionary:
 	return summary
 
 
-## Updates every plugin from update_ids() (the dock asks for confirmation first).
-## Returns { "installed": PackedStringArray, "failed": { id: error }, "restart_recommended": bool }.
+## Updates every plugin from update_ids() (the dock asks for confirmation first). Returns the
+## same summary as install_missing().
 func install_updates() -> Dictionary:
-	var summary := { "installed": PackedStringArray(), "failed": {}, "restart_recommended": false }
-	for id in update_ids():
-		var result := await install(id)
-		if result["ok"]:
-			summary["installed"].append(id)
-			summary["restart_recommended"] = summary["restart_recommended"] or result["restart_recommended"]
-		else:
-			summary["failed"][id] = result["error"]
-	return summary
+	return await _install_all(update_ids())
 
 
 ## Versions the plugin's source offers, newest first: [{ "version", "tag", "prerelease",
@@ -250,66 +243,26 @@ func available_versions(id: String) -> Array[Dictionary]:
 ## Without force a modified, pinned or unmanaged folder is left alone and the result has
 ## "needs_confirmation" set.
 func install(id: String, force: bool = false, version: String = "", pin: bool = false) -> Dictionary:
-	var state := get_state(id)
-	var refusal := _refuse_action(state)
-	if refusal != "":
-		return _error_result(id, refusal)
-	var source: LoadoutSource = _sources.get(id)
-	if source == null:
-		return _error_result(id, "Source type %s is not supported." % state.entry.source.get("type"))
-	var target := state.target_version
-	if version != "":
-		if not await source.has_version(version):
-			return _error_result(id, "The source does not offer version %s." % version)
-		target = version
-		if state.status == Status.PINNED and not _is_modified(state):
-			force = true
-	if target == "":
-		return _error_result(id, state.message if state.message != "" else "No version to install is known.")
-	if state.entry.folder == SELF_FOLDER:
-		return await _self_update(state, source, force, target)
-	busy = true
-	var result: Dictionary = await installer.install(state.entry, source, target, state.lock_entry, force)
-	if result["ok"]:
-		lockfile.set_installed(id, target, result["hash"], _today())
-		if version != "":
-			lockfile.set_pinned(id, pin)
-		lockfile.set_ignored(id, false)
-		_save_lock()
-		if result["restart_recommended"]:
-			restart_recommended.emit()
-	busy = false
-	await refresh()
-	return result
+	return await _exclusive(id, func(state: PluginState) -> Dictionary: return await _install(state, force, version, pin))
 
 
 ## Removes the plugin from the project and ignores it here so the sync does not bring it back.
 func uninstall(id: String) -> Dictionary:
-	var state := get_state(id)
-	var refusal := _refuse_action(state)
-	if refusal == "" and state.entry.folder == SELF_FOLDER:
-		refusal = "Loadout cannot remove itself. Disable it in Project Settings → Plugins and delete its folder by hand."
-	if refusal != "":
-		return _error_result(id, refusal)
-	busy = true
-	var result: Dictionary = await installer.uninstall(state.entry)
-	if result["ok"]:
-		lockfile.remove(id)
-		lockfile.set_ignored(id, true)
-		_save_lock()
-	busy = false
-	await refresh()
-	return result
+	return await _exclusive(id, _uninstall)
 
 
 ## The lock edits below recompute the state (may query the source), always await them.
 func set_pinned(id: String, pinned: bool) -> Error:
+	if busy:
+		return ERR_BUSY
 	if not _lock_ok or not lockfile.set_pinned(id, pinned):
 		return ERR_DOES_NOT_EXIST
 	return await _save_and_update(id)
 
 
 func set_ignored(id: String, ignored: bool) -> Error:
+	if busy:
+		return ERR_BUSY
 	if not _lock_ok:
 		return ERR_FILE_CORRUPT
 	lockfile.set_ignored(id, ignored)
@@ -318,6 +271,8 @@ func set_ignored(id: String, ignored: bool) -> Error:
 
 ## Accepts the current folder content (manual edits or a hand-installed copy) as installed.
 func adopt(id: String) -> Error:
+	if busy:
+		return ERR_BUSY
 	var state := get_state(id)
 	if not _lock_ok or state == null or state.entry == null:
 		return ERR_DOES_NOT_EXIST
@@ -330,6 +285,8 @@ func adopt(id: String) -> Error:
 
 ## Drops a lock entry of a plugin that is no longer in the registry (files stay).
 func forget(id: String) -> Error:
+	if busy:
+		return ERR_BUSY
 	if not _lock_ok or not lockfile.remove(id):
 		return ERR_DOES_NOT_EXIST
 	return await _save_and_update(id)
@@ -358,21 +315,13 @@ func import_registry(path: String) -> Dictionary:
 		return summary
 	var other: LoadoutRegistry = loaded["registry"]
 	summary["warnings"] = other.warnings
-	for entry in other.entries:
-		if registry.get_entry(entry.id) != null:
-			summary["skipped"][entry.id] = "already in the registry"
-			continue
-		var error := registry.add_entry(entry.to_dict())
-		if error != "":
-			summary["skipped"][entry.id] = error
-		else:
-			summary["added"].append(entry.id)
+	summary.merge(registry.merge(other), true)
+	var error := ""
 	if not summary["added"].is_empty():
-		var err := registry.save_file(registry_path)
-		if err != OK:
-			summary["error"] = "Saving the registry failed: %s" % error_string(err)
-			await refresh()
-			return summary
+		error = await _save_registry()
+	if error != "":
+		summary["error"] = error
+		return summary
 	summary["ok"] = true
 	await refresh()
 	return summary
@@ -383,18 +332,16 @@ func import_registry(path: String) -> Dictionary:
 ## recorded in the lock as installed, nothing is copied or toggled.
 func add_registry_entry(data: Dictionary, take_over: bool = false) -> String:
 	if not _registry_ok:
-		return "The registry cannot be read, nothing changed."
+		return REGISTRY_UNREADABLE
 	var error := registry.add_entry(data)
 	if error != "":
 		return error
-	var err := registry.save_file(registry_path)
-	if err != OK:
-		registry.remove_entry(str(data.get("id", "")))
-		return "Saving the registry failed: %s" % error_string(err)
+	error = await _save_registry()
+	if error != "":
+		return error
 	var entry := registry.get_entry(str(data.get("id", "")))
-	var dir := installer.target_dir(entry)
-	if take_over and _lock_ok and DirAccess.dir_exists_absolute(dir) and lockfile.get_entry(entry.id) == null:
-		lockfile.set_installed(entry.id, _lockable_version(entry), Fs.hash_dir(dir), _today())
+	if take_over and _lock_ok and DirAccess.dir_exists_absolute(installer.target_dir(entry)) and lockfile.get_entry(entry.id) == null:
+		lockfile.set_installed(entry.id, _lockable_version(entry), Fs.hash_dir(installer.target_dir(entry)), _today())
 		_save_lock()
 	await refresh()
 	return ""
@@ -404,27 +351,12 @@ func add_registry_entry(data: Dictionary, take_over: bool = false) -> String:
 ## folder would not move installed copies, see set_registry_folder()). Returns "" or an error message.
 func update_registry_entry(id: String, data: Dictionary) -> String:
 	if not _registry_ok:
-		return "The registry cannot be read, nothing changed."
-	var entry := registry.get_entry(id)
-	if entry == null:
-		return "The plugin is not in the registry."
-	var merged := data.duplicate()
-	merged["id"] = entry.id
-	merged["folder"] = entry.folder
-	var parsed := LoadoutRegistry.parse_entry(merged)
-	if not parsed["ok"]:
-		return parsed["error"]
-	var updated: LoadoutRegistry.Entry = parsed["entry"]
-	var previous := entry.to_dict()
-	entry.source = updated.source
-	entry.version_range = updated.version_range
-	entry.auto_install = updated.auto_install
-	var err := registry.save_file(registry_path)
-	if err != OK:
-		entry.source = previous["source"]
-		entry.version_range = previous["range"]
-		entry.auto_install = previous["auto_install"]
-		return "Saving the registry failed: %s" % error_string(err)
+		return REGISTRY_UNREADABLE
+	var error := registry.update_entry(id, data)
+	if error == "":
+		error = await _save_registry()
+	if error != "":
+		return error
 	await refresh()
 	return ""
 
@@ -433,24 +365,12 @@ func update_registry_entry(id: String, data: Dictionary) -> String:
 ## Returns "" or an error message.
 func set_registry_folder(id: String, folder: String) -> String:
 	if not _registry_ok:
-		return "The registry cannot be read, nothing changed."
-	var entry := registry.get_entry(id)
-	if entry == null:
-		return "The plugin is not in the registry."
-	var data := entry.to_dict()
-	data["folder"] = folder
-	var parsed := LoadoutRegistry.parse_entry(data)
-	if not parsed["ok"]:
-		return parsed["error"]
-	for other in registry.entries:
-		if other != entry and other.folder.to_lower() == folder.to_lower():
-			return "Folder %s is already used by %s." % [folder, other.id]
-	var previous := entry.folder
-	entry.folder = folder
-	var err := registry.save_file(registry_path)
-	if err != OK:
-		entry.folder = previous
-		return "Saving the registry failed: %s" % error_string(err)
+		return REGISTRY_UNREADABLE
+	var error := registry.set_folder(id, folder)
+	if error == "":
+		error = await _save_registry()
+	if error != "":
+		return error
 	# Cached download links were picked for the old folder name.
 	await refresh(true)
 	return ""
@@ -463,6 +383,16 @@ func remove_registry_entry(id: String) -> Error:
 	var err := registry.save_file(registry_path)
 	await refresh()
 	return err
+
+
+## Saves the registry. When that fails the unsaved change is dropped by reloading the file.
+## Returns "" or an error message.
+func _save_registry() -> String:
+	var err := registry.save_file(registry_path)
+	if err == OK:
+		return ""
+	await refresh()
+	return "Saving the registry failed: %s" % error_string(err)
 
 
 func _load_files() -> void:
@@ -513,21 +443,28 @@ func _compute_state(entry: LoadoutRegistry.Entry, check_updates: bool = false) -
 	if state.display_name == "":
 		state.display_name = entry.id
 
-	var installed := DirAccess.dir_exists_absolute(installer.target_dir(entry))
-	if not installed:
-		state.status = Status.IGNORED if lockfile.is_ignored(entry.id) else Status.MISSING
-		state.target_version = state.latest_version
-		if state.lock_entry != null and source != null and await source.has_version(state.lock_entry.version):
-			state.target_version = state.lock_entry.version
-		elif state.lock_entry != null and state.latest_version != "":
-			state.message = "The lock wants version %s, the source offers %s." % [state.lock_entry.version, state.latest_version]
-		if source_error != "":
-			state.message = source_error
-		_add_release_info(state, source)
-		return state
+	if DirAccess.dir_exists_absolute(installer.target_dir(entry)):
+		_describe_installed(state, source_error)
+	else:
+		await _describe_missing(state, source, source_error)
+	_add_release_info(state, source)
+	return state
 
-	var overwrite := installer.check_overwrite(entry, state.lock_entry)
-	if overwrite == LoadoutInstaller.CONFIRM_UNMANAGED and entry.folder == SELF_FOLDER:
+
+func _describe_missing(state: PluginState, source: LoadoutSource, source_error: String) -> void:
+	state.status = Status.IGNORED if lockfile.is_ignored(state.id) else Status.MISSING
+	state.target_version = state.latest_version
+	if state.lock_entry != null and source != null and await source.has_version(state.lock_entry.version):
+		state.target_version = state.lock_entry.version
+	elif state.lock_entry != null and state.latest_version != "":
+		state.message = "The lock wants version %s, the source offers %s." % [state.lock_entry.version, state.latest_version]
+	if source_error != "":
+		state.message = source_error
+
+
+func _describe_installed(state: PluginState, source_error: String) -> void:
+	var overwrite := installer.check_overwrite(state.entry, state.lock_entry)
+	if overwrite == LoadoutInstaller.CONFIRM_UNMANAGED and state.entry.folder == SELF_FOLDER:
 		# Loadout itself arrives by the install script, not through the lock.
 		overwrite = ""
 	match overwrite:
@@ -555,8 +492,6 @@ func _compute_state(entry: LoadoutRegistry.Entry, check_updates: bool = false) -
 	# Overwriting (after confirmation) or updating goes to the newest version in range.
 	if state.status in [Status.UPDATE, Status.MODIFIED, Status.PINNED, Status.UNMANAGED]:
 		state.target_version = state.latest_version
-	_add_release_info(state, source)
-	return state
 
 
 func _add_release_info(state: PluginState, source: LoadoutSource) -> void:
@@ -567,21 +502,84 @@ func _add_release_info(state: PluginState, source: LoadoutSource) -> void:
 	state.release_url = str(release.get("url", ""))
 
 
+func _install(state: PluginState, force: bool, version: String, pin: bool) -> Dictionary:
+	var source: LoadoutSource = _sources.get(state.id)
+	if source == null:
+		return _error_result(state.id, "Source type %s is not supported." % state.entry.source.get("type"))
+	var target := state.target_version
+	if version != "":
+		if not await source.has_version(version):
+			return _error_result(state.id, "The source does not offer version %s." % version)
+		target = version
+		if state.status == Status.PINNED and not _is_modified(state):
+			force = true
+	if target == "":
+		return _error_result(state.id, state.message if state.message != "" else "No version to install is known.")
+	if state.entry.folder == SELF_FOLDER:
+		return await _self_update(state, source, force, target)
+	var result: Dictionary = await installer.install(state.entry, source, target, state.lock_entry, force)
+	if result["ok"]:
+		_add_integrity_warning(result, state.lock_entry, target)
+		lockfile.set_installed(state.id, target, result["hash"], _today())
+		if version != "":
+			lockfile.set_pinned(state.id, pin)
+		lockfile.set_ignored(state.id, false)
+		_save_lock()
+		if result["restart_recommended"]:
+			restart_recommended.emit()
+	await refresh()
+	return result
+
+
+func _uninstall(state: PluginState) -> Dictionary:
+	if state.entry.folder == SELF_FOLDER:
+		return _error_result(state.id, "Loadout cannot remove itself. Disable it in Project Settings → Plugins and delete its folder by hand.")
+	var result: Dictionary = await installer.uninstall(state.entry)
+	if result["ok"]:
+		lockfile.remove(state.id)
+		lockfile.set_ignored(state.id, true)
+		_save_lock()
+	await refresh()
+	return result
+
+
 func _self_update(state: PluginState, source: LoadoutSource, force: bool, version: String) -> Dictionary:
 	if not force:
 		var reason := installer.check_overwrite(state.entry, state.lock_entry)
 		if reason == LoadoutInstaller.CONFIRM_MODIFIED or reason == LoadoutInstaller.CONFIRM_PINNED:
-			var result := _error_result(state.id, "Loadout is %s in this project." % ("edited by hand" if reason == LoadoutInstaller.CONFIRM_MODIFIED else "pinned"))
-			result["needs_confirmation"] = reason
-			return result
-	busy = true
+			var refused := _error_result(state.id, "Loadout is %s in this project." % ("edited by hand" if reason == LoadoutInstaller.CONFIRM_MODIFIED else "pinned"))
+			refused["needs_confirmation"] = reason
+			return refused
 	var result: Dictionary = await installer.self_update(state.entry, source, version)
 	if result["ok"]:
+		_add_integrity_warning(result, state.lock_entry, version)
 		lockfile.set_installed(state.id, version, result["hash"], _today())
 		_save_lock()
 		restart_required.emit()
+	return result
+
+
+## Runs an action on one plugin that changes the project. `busy` is set before the first await, so
+## a second action cannot start in between; the lock edits and install actions refuse while it is set.
+func _exclusive(id: String, action: Callable) -> Dictionary:
+	var state := get_state(id)
+	var refusal := _refuse_action(state)
+	if refusal != "":
+		return _error_result(id, refusal)
+	busy = true
+	var result: Dictionary = await action.call(state)
 	busy = false
 	return result
+
+
+## The lock records the files of a version when it was first installed. When the same version
+## comes back with other files (another machine, a re-uploaded package), the result gets a warning.
+func _add_integrity_warning(result: Dictionary, previous: LoadoutLockfile.Entry, version: String) -> void:
+	if previous == null or previous.version != version or previous.folder_hash == "" or previous.folder_hash == result["hash"]:
+		return
+	var warning := "%s %s has other files than when it was locked (hash differs). Check the plugin before you trust it." % [result["id"], version]
+	Log.write(warning, Log.Level.WARNING)
+	result["warning"] = "\n".join(PackedStringArray([str(result.get("warning", "")), warning])).strip_edges()
 
 
 func _scan_unregistered() -> Array[Dictionary]:
@@ -655,8 +653,11 @@ func _save_and_update(id: String) -> Error:
 	var err := _save_lock()
 	var state := get_state(id)
 	if state != null and state.entry != null:
+		var fresh := await _compute_state(state.entry)
+		# A refresh may have replaced the list while the state was computed.
 		var index := states.find(state)
-		states[index] = await _compute_state(state.entry)
+		if index >= 0:
+			states[index] = fresh
 		checker.save_cache()
 	elif state != null:
 		states.erase(state)

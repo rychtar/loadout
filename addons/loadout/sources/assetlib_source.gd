@@ -9,7 +9,6 @@ extends LoadoutSource
 
 const API := "https://godotengine.org/asset-library/api"
 const ASSET_PAGE := "https://godotengine.org/asset-library/asset/%s"
-const USER_AGENT := "Loadout (Godot editor plugin)"
 const MAX_NOTES := 4000
 const SEARCH_RESULTS := 20
 
@@ -43,7 +42,7 @@ func cache_key() -> String:
 
 func list_releases(_etag: String = "") -> Dictionary:
 	var result := { "ok": false, "error": "", "not_modified": false, "etag": "", "releases": [] }
-	var response: Dictionary = await _http.get_request("%s/asset/%s" % [API, asset_id], _headers())
+	var response: Dictionary = await _http.get_json("%s/asset/%s" % [API, asset_id], default_headers())
 	if not response["ok"]:
 		result["error"] = response["error"]
 		return result
@@ -51,7 +50,7 @@ func list_releases(_etag: String = "") -> Dictionary:
 		result["error"] = "Asset #%s not found in the Asset Library (code %d)." % [asset_id, response["code"]] \
 				if response["code"] == 404 else "The Asset Library answered with code %d." % response["code"]
 		return result
-	var asset: Variant = JSON.parse_string((response["body"] as PackedByteArray).get_string_from_utf8())
+	var asset: Variant = response["data"]
 	if typeof(asset) != TYPE_DICTIONARY:
 		result["error"] = "Unexpected Asset Library answer for #%s." % asset_id
 		return result
@@ -88,7 +87,7 @@ func fetch(version: String, dest_dir: String) -> Dictionary:
 	if release.is_empty():
 		return { "ok": false, "error": "The Asset Library only offers the current version of asset #%s, not %s." % [asset_id, version], "path": "" }
 	var url := str(release.get("download_url", ""))
-	var response: Dictionary = await _http.get_request(url, _headers())
+	var response: Dictionary = await _http.get_request(url, default_headers())
 	if not response["ok"]:
 		return { "ok": false, "error": response["error"], "path": "" }
 	if response["code"] != 200:
@@ -111,12 +110,12 @@ static func search(http: LoadoutHttp, query: String, godot_version: String) -> D
 	if text == "":
 		return { "ok": false, "error": "Enter what to search for.", "results": [] }
 	var url := "%s/asset?type=addon&filter=%s&godot_version=%s&max_results=%d" % [API, text.uri_encode(), godot_version, SEARCH_RESULTS]
-	var response: Dictionary = await http.get_request(url, PackedStringArray(["User-Agent: %s" % USER_AGENT]))
+	var response: Dictionary = await http.get_json(url, default_headers())
 	if not response["ok"]:
 		return { "ok": false, "error": response["error"], "results": [] }
 	if response["code"] != 200:
 		return { "ok": false, "error": "The Asset Library answered with code %d." % response["code"], "results": [] }
-	var data: Variant = JSON.parse_string((response["body"] as PackedByteArray).get_string_from_utf8())
+	var data: Variant = response["data"]
 	if typeof(data) != TYPE_DICTIONARY or typeof(data.get("result")) != TYPE_ARRAY:
 		return { "ok": false, "error": "Unexpected Asset Library answer.", "results": [] }
 	var results: Array[Dictionary] = []
@@ -129,6 +128,3 @@ static func search(http: LoadoutHttp, query: String, godot_version: String) -> D
 		results.append(entry)
 	return { "ok": true, "error": "", "results": results }
 
-
-func _headers() -> PackedStringArray:
-	return PackedStringArray(["User-Agent: %s" % USER_AGENT])

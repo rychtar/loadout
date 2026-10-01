@@ -9,7 +9,6 @@ extends LoadoutSource
 
 const API := "https://store.godotengine.org/api/v1"
 const ASSET_PAGE := "https://store.godotengine.org/asset/%s/"
-const USER_AGENT := "Loadout (Godot editor plugin)"
 const MAX_NOTES := 4000
 const SEARCH_RESULTS := 20
 
@@ -89,7 +88,7 @@ func fetch(version: String, dest_dir: String) -> Dictionary:
 		return { "ok": false, "error": "The Asset Store no longer offers %s %s." % [asset, version], "path": "" }
 	if url == "":
 		return { "ok": false, "error": "%s %s has no public download (paid assets are not supported)." % [asset, version], "path": "" }
-	var response: Dictionary = await _http.get_request(url, _headers())
+	var response: Dictionary = await _http.get_request(url, default_headers())
 	if not response["ok"]:
 		return { "ok": false, "error": response["error"], "path": "" }
 	if response["code"] != 200:
@@ -107,12 +106,12 @@ static func search(http: LoadoutHttp, query: String, godot_version: String) -> D
 	if godot_version != "":
 		url += "&compatibility=%s" % godot_version
 	url += "&batch_size=%d" % SEARCH_RESULTS
-	var response: Dictionary = await http.get_request(url, PackedStringArray(["User-Agent: %s" % USER_AGENT]))
+	var response: Dictionary = await http.get_json(url, default_headers())
 	if not response["ok"]:
 		return { "ok": false, "error": response["error"], "results": [] }
 	if response["code"] != 200:
 		return { "ok": false, "error": "The Asset Store answered with code %d." % response["code"], "results": [] }
-	var data: Variant = JSON.parse_string((response["body"] as PackedByteArray).get_string_from_utf8())
+	var data: Variant = response["data"]
 	if typeof(data) != TYPE_DICTIONARY or typeof(data.get("hits")) != TYPE_ARRAY:
 		return { "ok": false, "error": "Unexpected Asset Store answer.", "results": [] }
 	var results: Array[Dictionary] = []
@@ -135,14 +134,14 @@ func _fetch_release_data() -> Dictionary:
 	var url := "%s/releases/%s/" % [API, asset]
 	if _godot_version != "":
 		url += "?compatibility=%s" % _godot_version
-	var response: Dictionary = await _http.get_request(url, _headers())
+	var response: Dictionary = await _http.get_json(url, default_headers())
 	if not response["ok"]:
 		return { "ok": false, "error": response["error"] }
 	if response["code"] == 404:
 		return { "ok": false, "error": "Asset %s not found in the Asset Store." % asset }
 	if response["code"] != 200:
 		return { "ok": false, "error": "The Asset Store answered with code %d." % response["code"] }
-	var data: Variant = JSON.parse_string((response["body"] as PackedByteArray).get_string_from_utf8())
+	var data: Variant = response["data"]
 	if typeof(data) != TYPE_ARRAY:
 		return { "ok": false, "error": "Unexpected Asset Store answer for %s." % asset }
 	var items: Array[Dictionary] = []
@@ -151,6 +150,3 @@ func _fetch_release_data() -> Dictionary:
 			items.append(item)
 	return { "ok": true, "error": "", "data": items }
 
-
-func _headers() -> PackedStringArray:
-	return PackedStringArray(["User-Agent: %s" % USER_AGENT])

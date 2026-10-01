@@ -38,6 +38,16 @@ func get_request(url: String, headers: PackedStringArray = []) -> Dictionary:
 	return _error("Too many redirects from %s." % url.get_slice("/", 2))
 
 
+## GET that expects a JSON body. Returns the get_request() result plus "data": the parsed body,
+## null unless the answer is 200 with valid JSON (callers still check "code" for their own messages).
+func get_json(url: String, headers: PackedStringArray = []) -> Dictionary:
+	var response: Dictionary = await get_request(url, headers)
+	response["data"] = null
+	if response["ok"] and response["code"] == 200:
+		response["data"] = JSON.parse_string((response["body"] as PackedByteArray).get_string_from_utf8())
+	return response
+
+
 ## Absolute address a Location header points to, "" when it is empty.
 static func redirect_target(base_url: String, location: String) -> String:
 	if location == "":

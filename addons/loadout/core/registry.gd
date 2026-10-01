@@ -41,6 +41,8 @@ class Entry:
 		}
 
 
+static var _regex_cache: Dictionary[String, RegEx] = {}
+
 var entries: Array[Entry] = []
 ## Problems found while parsing, for the dock.
 var warnings: PackedStringArray = []
@@ -142,6 +144,58 @@ func add_entry(data: Variant) -> String:
 	return ""
 
 
+## Replaces source, version range and auto_install of an entry; id and folder stay (a new folder
+## would not move installed copies, see set_folder()). Returns "" or an error message.
+func update_entry(id: String, data: Dictionary) -> String:
+	var entry := get_entry(id)
+	if entry == null:
+		return "The plugin is not in the registry."
+	var merged := data.duplicate()
+	merged["id"] = entry.id
+	merged["folder"] = entry.folder
+	var parsed := parse_entry(merged)
+	if not parsed["ok"]:
+		return parsed["error"]
+	var updated: Entry = parsed["entry"]
+	entry.source = updated.source
+	entry.version_range = updated.version_range
+	entry.auto_install = updated.auto_install
+	return ""
+
+
+## Changes the plugin folder of an entry. Returns "" or an error message.
+func set_folder(id: String, folder: String) -> String:
+	var entry := get_entry(id)
+	if entry == null:
+		return "The plugin is not in the registry."
+	var data := entry.to_dict()
+	data["folder"] = folder
+	var parsed := parse_entry(data)
+	if not parsed["ok"]:
+		return parsed["error"]
+	for other in entries:
+		if other != entry and other.folder.to_lower() == folder.to_lower():
+			return "Folder %s is already used by %s." % [folder, other.id]
+	entry.folder = folder
+	return ""
+
+
+## Adds the entries of other whose id is new; existing ones stay.
+## Returns { "added": PackedStringArray, "skipped": { id: reason } }.
+func merge(other: LoadoutRegistry) -> Dictionary:
+	var summary := { "added": PackedStringArray(), "skipped": {} }
+	for entry in other.entries:
+		if get_entry(entry.id) != null:
+			summary["skipped"][entry.id] = "already in the registry"
+			continue
+		var error := add_entry(entry.to_dict())
+		if error != "":
+			summary["skipped"][entry.id] = error
+		else:
+			summary["added"].append(entry.id)
+	return summary
+
+
 func remove_entry(id: String) -> bool:
 	for i in entries.size():
 		if entries[i].id == id:
@@ -185,7 +239,7 @@ static func _parse_source(data: Variant) -> Dictionary:
 			var text: String = asset.strip_edges()
 			if text.begins_with(_STORE_URL_PREFIX):
 				text = text.trim_prefix(_STORE_URL_PREFIX).trim_suffix("/")
-			if RegEx.create_from_string(_STORE_ASSET_PATTERN).search(text) == null:
+			if not _matches(_STORE_ASSET_PATTERN, text):
 				return { "ok": false, "error": "invalid Asset Store asset %s (expected publisher/slug)" % asset }
 			return { "ok": true, "source": { "type": SOURCE_STORE, "asset": text } }
 	return { "ok": false, "error": "unknown source type %s" % var_to_str(data.get("type")) }
@@ -197,13 +251,19 @@ static func _normalize_repo(repo: String) -> String:
 		text = text.trim_prefix(_GITHUB_URL_PREFIX).trim_suffix("/").trim_suffix(".git")
 	elif text.contains("://"):
 		return ""
-	if RegEx.create_from_string(_REPO_PATTERN).search(text) == null:
+	if not _matches(_REPO_PATTERN, text):
 		return ""
 	return text
 
 
 static func _is_valid_name(text: String) -> bool:
-	return RegEx.create_from_string(_NAME_PATTERN).search(text) != null and not text.contains("..")
+	return _matches(_NAME_PATTERN, text) and not text.contains("..")
+
+
+static func _matches(pattern: String, text: String) -> bool:
+	if not _regex_cache.has(pattern):
+		_regex_cache[pattern] = RegEx.create_from_string(pattern)
+	return _regex_cache[pattern].search(text) != null
 
 
 static func _entry_error(id: String, message: String) -> Dictionary:

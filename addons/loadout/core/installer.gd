@@ -83,15 +83,10 @@ func install(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: Strin
 			return result
 
 	var staging := staging_root.path_join(entry.id)
-	Fs.remove_dir(staging)
-	var fetched: Dictionary = await source.fetch(version, staging)
+	var fetched: Dictionary = await _stage(entry, source, version)
 	if not fetched["ok"]:
-		Fs.remove_dir(staging)
-		return _fail(result, "Download of %s %s failed: %s" % [entry.id, version, fetched["error"]])
+		return _fail(result, fetched["error"])
 	var staged: String = fetched["path"]
-	if not FileAccess.file_exists(staged.path_join("plugin.cfg")):
-		Fs.remove_dir(staging)
-		return _fail(result, "Package %s %s has no plugin.cfg." % [entry.id, version])
 	result["package_folder"] = str(fetched.get("package_folder", ""))
 	if not DirAccess.dir_exists_absolute(target_dir(entry)) and result["package_folder"] != "" \
 			and result["package_folder"] != entry.folder:
@@ -134,15 +129,10 @@ func self_update(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: S
 		"needs_confirmation": "", "restart_required": false,
 	}
 	var staging := staging_root.path_join(entry.id)
-	Fs.remove_dir(staging)
-	var fetched: Dictionary = await source.fetch(version, staging)
+	var fetched: Dictionary = await _stage(entry, source, version)
 	if not fetched["ok"]:
-		Fs.remove_dir(staging)
-		return _fail(result, "Download of Loadout %s failed: %s" % [version, fetched["error"]])
+		return _fail(result, fetched["error"])
 	var staged: String = fetched["path"]
-	if not FileAccess.file_exists(staged.path_join("plugin.cfg")):
-		Fs.remove_dir(staging)
-		return _fail(result, "Loadout package %s has no plugin.cfg." % version)
 	var target := target_dir(entry)
 	_preserve_uids(target, staged)
 	var backup := _backup_path(entry, result["from"])
@@ -194,6 +184,22 @@ func uninstall(entry: LoadoutRegistry.Entry) -> Dictionary:
 	Log.write("Removed %s, backup in %s." % [entry.id, backup])
 	plugin_removed.emit(entry.id)
 	return result
+
+
+## Downloads version into a clean staging folder and checks that it holds a plugin. Returns the
+## fetch() result; on failure "error" is the message and the staging folder is gone.
+func _stage(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: String) -> Dictionary:
+	var staging := staging_root.path_join(entry.id)
+	Fs.remove_dir(staging)
+	var fetched: Dictionary = await source.fetch(version, staging)
+	if not fetched["ok"]:
+		Fs.remove_dir(staging)
+		fetched["error"] = "Download of %s %s failed: %s" % [entry.id, version, fetched["error"]]
+		return fetched
+	if not FileAccess.file_exists(str(fetched["path"]).path_join("plugin.cfg")):
+		Fs.remove_dir(staging)
+		return { "ok": false, "error": "Package %s %s has no plugin.cfg." % [entry.id, version], "path": "" }
+	return fetched
 
 
 func _install_fresh(entry: LoadoutRegistry.Entry, staged: String, enable: bool, result: Dictionary) -> void:

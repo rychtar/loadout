@@ -191,6 +191,41 @@ func test_adopt_plugin_without_valid_version() -> void:
 	check(manager.get_state("fake_a").lock_entry != null, "still managed after reload")
 
 
+func test_reinstall_with_other_files_warns() -> void:
+	_setup("integrity", [_local("fake_a", "1.0.0")])
+	await manager.refresh()
+	await manager.install_missing()
+	Fs.remove_dir(addons.path_join("fake_a"))
+	await manager.refresh()
+	var clean: Dictionary = await manager.install("fake_a")
+	check(clean["ok"], "reinstalled from the lock")
+	check_eq(str(clean.get("warning", "")), "", "same files, no warning")
+	var lock := _saved_lock()
+	lock.get_entry("fake_a").folder_hash = "sha256:" + "0".repeat(64)
+	check_eq(lock.save_file(_lock_path()), OK, "lock rewritten with another hash")
+	Fs.remove_dir(addons.path_join("fake_a"))
+	await manager.refresh()
+	var result: Dictionary = await manager.install("fake_a")
+	check(result["ok"], "still installed")
+	check(str(result["warning"]).contains("hash differs"), "warned: %s" % result.get("warning", ""))
+
+
+func test_actions_are_refused_while_busy() -> void:
+	_setup("busy", [_local("fake_a", "1.0.0")])
+	await manager.refresh()
+	await manager.install_missing()
+	manager.busy = true
+	check_eq(await manager.set_pinned("fake_a", true), ERR_BUSY, "pin")
+	check_eq(await manager.set_ignored("fake_a", true), ERR_BUSY, "ignore")
+	check_eq(await manager.adopt("fake_a"), ERR_BUSY, "adopt")
+	check_eq(await manager.forget("fake_a"), ERR_BUSY, "forget")
+	check(not (await manager.install("fake_a"))["ok"], "install")
+	check(not (await manager.uninstall("fake_a"))["ok"], "uninstall")
+	check(DirAccess.dir_exists_absolute(addons.path_join("fake_a")), "nothing was removed")
+	manager.busy = false
+	check_eq(await manager.set_pinned("fake_a", true), OK, "works again")
+
+
 func test_force_overwrite_modified() -> void:
 	_setup("force", [_local("fake_a", "1.0.0")])
 	await manager.refresh()
