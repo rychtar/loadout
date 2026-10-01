@@ -36,3 +36,18 @@ func test_second_border_keeps_the_sum_and_the_minimums() -> void:
 
 func test_tiny_tree_never_goes_below_the_minimum() -> void:
 	check_eq(Dock.resize_columns(60, 60, 1, -100, 100, MIN_COLUMN, MIN_NAME), Vector2i(MIN_COLUMN, 60), "narrow dock")
+
+
+func test_fit_keeps_the_text_widths_when_there_is_room() -> void:
+	check_eq(Dock.fit_widths(120, 100, TOTAL, MIN_COLUMN, MIN_NAME), Vector2i(120, 100), "wide enough")
+	check_eq(Dock.fit_widths(120, 100, 0, MIN_COLUMN, MIN_NAME), Vector2i(120, 100), "not laid out yet, no limit")
+
+
+func test_fit_leaves_the_plugin_column_its_minimum() -> void:
+	var widths := Dock.fit_widths(200, 180, 440, MIN_COLUMN, MIN_NAME)
+	check_eq(widths.x + widths.y, 440 - MIN_NAME, "the other two share what is left")
+	check(widths.x > widths.y, "in proportion to their text")
+
+
+func test_fit_never_goes_below_the_column_minimum() -> void:
+	check_eq(Dock.fit_widths(200, 180, 120, MIN_COLUMN, MIN_NAME), Vector2i(MIN_COLUMN, MIN_COLUMN), "tiny dock")

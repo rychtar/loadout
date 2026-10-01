@@ -187,7 +187,7 @@ func _build() -> void:
 	_tree.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_tree.custom_minimum_size = Vector2(0, 160)
 	_tree.item_selected.connect(_on_item_selected)
-	_tree.resized.connect(_place_grips)
+	_tree.resized.connect(_on_tree_resized)
 	add_child(_tree)
 	for boundary in [1, 2]:
 		var grip := ColumnGrip.new()
@@ -315,8 +315,11 @@ func _fit_columns(reset: bool = false) -> void:
 	var version_texts: PackedStringArray = ["Version"]
 	for state in manager.states:
 		version_texts.append(_version_text(state))
-	_status_width = _widest(font, font_size, status_texts) + padding
-	_version_width = _widest(font, font_size, version_texts) + padding
+	var scale := EditorInterface.get_editor_scale()
+	var widths := fit_widths(_widest(font, font_size, status_texts) + padding, _widest(font, font_size, version_texts) + padding,
+			roundi(_tree.size.x), roundi(MIN_COLUMN * scale), roundi(MIN_NAME_COLUMN * scale))
+	_status_width = widths.x
+	_version_width = widths.y
 	_apply_columns()
 
 
@@ -344,6 +347,18 @@ func _on_grip_dragged(delta: int, boundary: int) -> void:
 	_apply_columns()
 
 
+## Widths that fit the text, shrunk when the Plugin column would get less than min_name of the
+## total width (a narrow dock): the two columns then share the room in proportion, each keeping
+## at least min_column. total 0 means the tree is not laid out yet, nothing is limited.
+static func fit_widths(status: int, version: int, total: int, min_column: int, min_name: int) -> Vector2i:
+	var room := total - min_name
+	if total <= 0 or status + version <= room:
+		return Vector2i(status, version)
+	var new_status := maxi(min_column, floori(status * float(room) / (status + version)))
+	var new_version := maxi(min_column, room - new_status)
+	return Vector2i(new_status, new_version)
+
+
 ## New { Status, Version } widths after the border moved by delta pixels (positive = to the right).
 ## The Plugin column takes what the two others leave, but never less than min_name.
 static func resize_columns(status: int, version: int, boundary: int, delta: int, total: int,
@@ -354,6 +369,13 @@ static func resize_columns(status: int, version: int, boundary: int, delta: int,
 	var sum := status + version
 	var new_status := clampi(status + delta, min_column, maxi(min_column, sum - min_column))
 	return Vector2i(new_status, sum - new_status)
+
+
+func _on_tree_resized() -> void:
+	if _columns_fitted:
+		_fit_columns()
+	else:
+		_place_grips()
 
 
 func _place_grips() -> void:
