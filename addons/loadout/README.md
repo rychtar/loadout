@@ -29,7 +29,7 @@ plugins a project is missing, keeps their versions in a lock file and tells you 
 1. Copy `addons/loadout/` into your project's `addons/` folder (or install it from the Asset Store).
 2. Enable **Loadout** in **Project → Project Settings → Plugins**.
 
-You need Godot 4.7+. For many projects, one command does both steps. It is safe to run again, and
+You need Godot 4.5 or newer (tested on 4.5.1 and 4.7.1). For many projects, one command does both steps. It is safe to run again, and
 a different Loadout version is replaced only with `--force` (close the project's editor first):
 
 ```bash
@@ -41,7 +41,8 @@ through Godot: `godot --headless --path <this repository> --script res://tools/i
 
 ## Usage
 
-Everything is in the **Loadout** dock on the right side of the editor.
+Everything is in the **Loadout** dock on the right side of the editor. Drag a column border in the
+plugin list to resize it, double-click it to fit the column to its text.
 
 - **Add a plugin**: **+** searches the Asset Store, takes a GitHub repository (`owner/name`) or a
   local folder with `plugin.cfg`. Allowed versions: `*` (newest), `^1.2.0` (minor and patch
