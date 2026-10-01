@@ -24,9 +24,37 @@ const STATUS_TEXT := {
 	Status.ORPHAN: "Not in registry",
 }
 
+## Narrowest a resized Status or Version column and the Plugin column may get, in editor-scale pixels.
+const MIN_COLUMN := 48
+const MIN_NAME_COLUMN := 96
+## Room a column keeps around its text, in editor-scale pixels.
+const COLUMN_PADDING := 24
+
 const MENU_EXPORT := 0
 const MENU_IMPORT := 1
 const MENU_TOKEN := 2
+
+## Grip on a column border of the plugin list: drag to resize, double-click to fit the content.
+class ColumnGrip extends Control:
+	signal dragged(delta: int)
+	signal fit_requested()
+
+	var _dragging := false
+
+	func _init() -> void:
+		mouse_default_cursor_shape = Control.CURSOR_HSIZE
+		tooltip_text = "Drag to resize the column, double-click to fit it to the text."
+
+	func _gui_input(event: InputEvent) -> void:
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+			_dragging = event.pressed
+			if event.double_click:
+				fit_requested.emit()
+			accept_event()
+		elif event is InputEventMouseMotion and _dragging:
+			dragged.emit(roundi(event.relative.x))
+			accept_event()
+
 
 var manager: LoadoutManager
 ## func(query: String) -> Dictionary (LoadoutStoreSource.search), set by plugin.gd.
@@ -39,6 +67,12 @@ var _problems_label: Label
 var _install_missing_button: Button
 var _update_all_button: Button
 var _tree: Tree
+var _grips: Array[ColumnGrip] = []
+## Widths of the Status and Version columns. The Plugin column takes the rest.
+var _status_width := 0
+var _version_width := 0
+## False once the user dragged a border: the columns then keep their width instead of fitting the text.
+var _columns_fitted := true
 var _unregistered_box: VBoxContainer
 var _unregistered_rows: VBoxContainer
 var _detail_title: Label
@@ -150,12 +184,17 @@ func _build() -> void:
 	_tree.set_column_expand(1, false)
 	_tree.set_column_expand(2, false)
 	var scale := EditorInterface.get_editor_scale()
-	_tree.set_column_custom_minimum_width(1, roundi(84 * scale))
-	_tree.set_column_custom_minimum_width(2, roundi(104 * scale))
 	_tree.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_tree.custom_minimum_size = Vector2(0, 160)
 	_tree.item_selected.connect(_on_item_selected)
+	_tree.resized.connect(_place_grips)
 	add_child(_tree)
+	for boundary in [1, 2]:
+		var grip := ColumnGrip.new()
+		grip.dragged.connect(_on_grip_dragged.bind(boundary))
+		grip.fit_requested.connect(_fit_columns.bind(true))
+		_tree.add_child(grip)
+		_grips.append(grip)
 
 	_unregistered_box = VBoxContainer.new()
 	add_child(_unregistered_box)
@@ -241,6 +280,8 @@ func _rebuild() -> void:
 		item.set_text(2, _version_text(state))
 		if state.id == _selected_id:
 			item.select(0)
+	if _columns_fitted:
+		_fit_columns(true)
 	_rebuild_unregistered()
 	_info_label.text = "Registry: %d · %s" % [manager.registry.entries.size() if manager.registry != null else 0, manager.lock_path.get_file()]
 	var problems := manager.errors.duplicate()
@@ -258,6 +299,76 @@ func _rebuild() -> void:
 	_update_all_button.text = "Update all (%d)…" % updates.size()
 	_update_all_button.visible = updates.size() > 1
 	_update_detail()
+
+
+## Sizes the Status and Version columns to their longest text (all status names, so the width
+## does not jump between refreshes).
+func _fit_columns(reset: bool = false) -> void:
+	if reset:
+		_columns_fitted = true
+	var font := _tree.get_theme_font("font")
+	var font_size := _tree.get_theme_font_size("font_size")
+	var padding := roundi(COLUMN_PADDING * EditorInterface.get_editor_scale())
+	var status_texts: PackedStringArray = ["Status"]
+	for text: String in STATUS_TEXT.values():
+		status_texts.append(text)
+	var version_texts: PackedStringArray = ["Version"]
+	for state in manager.states:
+		version_texts.append(_version_text(state))
+	_status_width = _widest(font, font_size, status_texts) + padding
+	_version_width = _widest(font, font_size, version_texts) + padding
+	_apply_columns()
+
+
+func _widest(font: Font, font_size: int, texts: PackedStringArray) -> int:
+	var widest := 0.0
+	for text in texts:
+		widest = maxf(widest, font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x)
+	return ceili(widest)
+
+
+func _apply_columns() -> void:
+	_tree.set_column_custom_minimum_width(1, _status_width)
+	_tree.set_column_custom_minimum_width(2, _version_width)
+	_place_grips.call_deferred()
+
+
+## boundary 1 is the border between Plugin and Status, 2 the one between Status and Version.
+func _on_grip_dragged(delta: int, boundary: int) -> void:
+	var scale := EditorInterface.get_editor_scale()
+	var widths := resize_columns(_status_width, _version_width, boundary, delta, roundi(_tree.size.x),
+			roundi(MIN_COLUMN * scale), roundi(MIN_NAME_COLUMN * scale))
+	_status_width = widths.x
+	_version_width = widths.y
+	_columns_fitted = false
+	_apply_columns()
+
+
+## New { Status, Version } widths after the border moved by delta pixels (positive = to the right).
+## The Plugin column takes what the two others leave, but never less than min_name.
+static func resize_columns(status: int, version: int, boundary: int, delta: int, total: int,
+		min_column: int, min_name: int) -> Vector2i:
+	if boundary == 1:
+		var widest_status := maxi(min_column, total - version - min_name)
+		return Vector2i(clampi(status - delta, min_column, widest_status), version)
+	var sum := status + version
+	var new_status := clampi(status + delta, min_column, maxi(min_column, sum - min_column))
+	return Vector2i(new_status, sum - new_status)
+
+
+func _place_grips() -> void:
+	if _grips.size() < 2:
+		return
+	var scale := EditorInterface.get_editor_scale()
+	var title_style := _tree.get_theme_stylebox("title_button_normal")
+	var title_font := _tree.get_theme_font("title_button_font")
+	var title_height := title_font.get_height(_tree.get_theme_font_size("title_button_font_size")) + title_style.get_minimum_size().y
+	var width := roundi(8 * scale)
+	var border := _tree.get_column_width(0)
+	for index in 2:
+		_grips[index].position = Vector2(border - width / 2.0, 0)
+		_grips[index].size = Vector2(width, title_height)
+		border += _tree.get_column_width(1 + index)
 
 
 func _rebuild_unregistered() -> void:
