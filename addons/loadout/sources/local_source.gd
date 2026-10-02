@@ -19,8 +19,9 @@ func describe() -> String:
 func list_releases(_etag: String = "") -> Dictionary:
 	var version := _current_version()
 	if version == "":
-		return { "ok": false, "error": "Folder %s has no plugin.cfg with a version." % path, "not_modified": false, "etag": "", "releases": [] }
-	var release := { "version": version, "tag": version, "prerelease": LoadoutVersion.parse(version) != null and LoadoutVersion.parse(version).is_prerelease(),
+		return listing_error(_no_version_error())
+	var parsed := LoadoutVersion.parse(version)
+	var release := { "version": version, "tag": version, "prerelease": parsed != null and parsed.is_prerelease(),
 			"notes": "", "url": "", "download_url": "" }
 	return { "ok": true, "error": "", "not_modified": false, "etag": "", "releases": [release] }
 
@@ -28,7 +29,7 @@ func list_releases(_etag: String = "") -> Dictionary:
 func get_latest_version(version_range: String) -> Dictionary:
 	var version := _current_version()
 	if version == "":
-		return { "ok": false, "error": "Folder %s has no plugin.cfg with a version." % path, "version": "" }
+		return { "ok": false, "error": _no_version_error(), "version": "" }
 	if not LoadoutVersion.satisfies(version, version_range):
 		return { "ok": false, "error": "Local version %s does not match range %s." % [version, version_range], "version": "" }
 	return { "ok": true, "error": "", "version": version }
@@ -51,6 +52,10 @@ func fetch(version: String, dest_dir: String) -> Dictionary:
 		Fs.remove_dir(dest_dir)
 		return { "ok": false, "error": "Copying from %s failed: %s" % [path, error_string(err)], "path": "" }
 	return { "ok": true, "error": "", "path": dest_dir }
+
+
+func _no_version_error() -> String:
+	return "Folder %s has no plugin.cfg with a version." % path
 
 
 func _current_version() -> String:

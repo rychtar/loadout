@@ -13,6 +13,8 @@ const SOURCE_GITHUB := 0
 const SOURCE_LOCAL := 1
 const SOURCE_STORE := 2
 
+static var _non_alphanumeric := RegEx.create_from_string("[^a-z0-9]+")
+
 ## func(query: String) -> Dictionary (LoadoutStoreSource.search), set by the dock.
 var store_search: Callable
 
@@ -49,15 +51,14 @@ func _init() -> void:
 	title = "Add a plugin to the global registry"
 	ok_button_text = "Add to registry"
 	cancel_button_text = "Cancel"
-	min_size = Vector2i(roundi(560 * EditorInterface.get_editor_scale()), 0)
-	var width := roundi(540 * EditorInterface.get_editor_scale())
+	var scale := EditorInterface.get_editor_scale()
+	min_size = Vector2i(roundi(560 * scale), 0)
+	var width := roundi(540 * scale)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 8)
 	add_child(box)
 
-	_existing_label = _caption("")
-	_existing_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_existing_label.custom_minimum_size.x = width
+	_existing_label = _wrapped(_caption(""), width)
 	box.add_child(_existing_label)
 	var source_row := HBoxContainer.new()
 	box.add_child(source_row)
@@ -77,10 +78,7 @@ func _init() -> void:
 	_repo_edit.placeholder_text = "bitwes/Gut"
 	_repo_edit.text_changed.connect(func(_text: String) -> void: _on_repo_changed())
 	_github_box.add_child(_repo_edit)
-	var github_note := _caption("Loadout installs the release's zip asset (or the tag's source zip). The folder below must match the plugin's folder in addons/ inside the release.")
-	github_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	github_note.custom_minimum_size.x = width
-	_github_box.add_child(github_note)
+	_github_box.add_child(_wrapped(_caption("Loadout installs the release's zip asset (or the tag's source zip). The folder below must match the plugin's folder in addons/ inside the release."), width))
 
 	_store_box = VBoxContainer.new()
 	box.add_child(_store_box)
@@ -96,12 +94,10 @@ func _init() -> void:
 	_search_button.pressed.connect(_search)
 	search_row.add_child(_search_button)
 	_results = ItemList.new()
-	_results.custom_minimum_size = Vector2(0, roundi(160 * EditorInterface.get_editor_scale()))
+	_results.custom_minimum_size = Vector2(0, roundi(160 * scale))
 	_results.item_selected.connect(_on_result_selected)
 	_store_box.add_child(_results)
-	_search_status = _caption("Free add-ons compatible with your Godot version.")
-	_search_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_search_status.custom_minimum_size.x = width
+	_search_status = _wrapped(_caption("Free add-ons compatible with your Godot version."), width)
 	_store_box.add_child(_search_status)
 
 	_local_box = VBoxContainer.new()
@@ -119,14 +115,9 @@ func _init() -> void:
 	browse.pressed.connect(_on_browse_pressed)
 	path_row.add_child(browse)
 
-	# Wrapping labels need a width up front, otherwise the dialog grows to one word per line.
-	_info_label = Label.new()
-	_info_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_info_label.custom_minimum_size.x = width
+	_info_label = _wrapped(Label.new(), width)
 	_local_box.add_child(_info_label)
-	_error_label = Label.new()
-	_error_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_error_label.custom_minimum_size.x = width
+	_error_label = _wrapped(Label.new(), width)
 	_error_label.add_theme_color_override("font_color", Color(0.94, 0.57, 0.54))
 	box.add_child(_error_label)
 
@@ -147,10 +138,7 @@ func _init() -> void:
 	_auto_check.button_pressed = true
 	box.add_child(_auto_check)
 
-	var note := _caption("The registry applies to all projects on this computer.")
-	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	note.custom_minimum_size.x = width
-	box.add_child(note)
+	box.add_child(_wrapped(_caption("The registry applies to all projects on this computer."), width))
 
 	_file_dialog = EditorFileDialog.new()
 	_file_dialog.file_mode = EditorFileDialog.FILE_MODE_OPEN_DIR
@@ -197,7 +185,7 @@ func open_existing(info: Dictionary) -> void:
 	_folder_edit.editable = false
 	_existing_label.text = "%s %s is already in addons/%s. Loadout keeps the current files; choose where updates come from." % [info["name"], info["version"], info["folder"]]
 	_existing_label.visible = true
-	_source_option.select(_source_option.get_item_index(SOURCE_STORE))
+	_select_source(SOURCE_STORE)
 	_on_source_changed()
 	_query_edit.text = info["name"]
 	reset_size()
@@ -223,17 +211,17 @@ func open_edit(entry: LoadoutRegistry.Entry, display_name: String) -> void:
 	var search_now := false
 	match entry.source.get("type"):
 		LoadoutRegistry.SOURCE_GITHUB:
-			_source_option.select(_source_option.get_item_index(SOURCE_GITHUB))
+			_select_source(SOURCE_GITHUB)
 			_repo_edit.text = entry.source["repo"]
 		LoadoutRegistry.SOURCE_LOCAL:
-			_source_option.select(_source_option.get_item_index(SOURCE_LOCAL))
+			_select_source(SOURCE_LOCAL)
 			_path_edit.text = entry.source["path"]
 		LoadoutRegistry.SOURCE_STORE:
-			_source_option.select(_source_option.get_item_index(SOURCE_STORE))
+			_select_source(SOURCE_STORE)
 			_store_asset = entry.source["asset"]
 		_:
 			_legacy_source = entry.source.duplicate()
-			_source_option.select(_source_option.get_item_index(SOURCE_STORE))
+			_select_source(SOURCE_STORE)
 			search_now = true
 	_on_source_changed()
 	if _source_option.get_selected_id() == SOURCE_STORE:
@@ -243,6 +231,10 @@ func open_edit(entry: LoadoutRegistry.Entry, display_name: String) -> void:
 	reset_size()
 	if search_now:
 		_search()
+
+
+func _select_source(source_id: int) -> void:
+	_source_option.select(_source_option.get_item_index(source_id))
 
 
 func _on_source_changed() -> void:
@@ -274,16 +266,11 @@ func _on_name_edited() -> void:
 	_validate()
 
 
-
 func _set_names(name: String) -> void:
 	_setting_names = true
 	_id_edit.text = name
 	_folder_edit.text = name
 	_setting_names = false
-
-
-func _is_github() -> bool:
-	return _source_option.get_selected_id() == SOURCE_GITHUB
 
 
 func _search() -> void:
@@ -322,7 +309,7 @@ func _pick_exact_match() -> void:
 
 
 func _normalized(text: String) -> String:
-	return RegEx.create_from_string("[^a-z0-9]+").sub(text.to_lower(), "", true)
+	return _non_alphanumeric.sub(text.to_lower(), "", true)
 
 
 func _on_result_selected(index: int) -> void:
@@ -330,7 +317,7 @@ func _on_result_selected(index: int) -> void:
 	_store_asset = asset["asset"]
 	if _auto_names:
 		# "Debug Draw 3D" -> "debug_draw_3d"; check it matches the folder inside the package.
-		var name := RegEx.create_from_string("[^a-z0-9]+").sub(str(asset["title"]).to_lower(), "_", true)
+		var name := _non_alphanumeric.sub(str(asset["title"]).to_lower(), "_", true)
 		_set_names(name.trim_prefix("_").trim_suffix("_"))
 	_search_status.text = "%s. If the package uses another folder, Loadout asks on the first install." % _store_asset
 	_validate()
@@ -415,6 +402,13 @@ func _on_confirmed() -> void:
 		entry_edited.emit(_editing_id, _entry_data())
 	else:
 		entry_submitted.emit(_entry_data(), _take_over)
+
+
+## Wrapping labels need a width up front, otherwise the dialog grows to one word per line.
+func _wrapped(label: Label, width: int) -> Label:
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.custom_minimum_size.x = width
+	return label
 
 
 func _caption(text: String) -> Label:

@@ -10,7 +10,6 @@ extends LoadoutSource
 
 const API := "https://api.github.com"
 const PER_PAGE := 50
-const MAX_NOTES := 4000
 ## The version is the end of the tag, after the start or a separator (so "godot4-1.2.3" is 1.2.3, not 4.0.0-1.2.3).
 const _TAG_VERSION_PATTERN := "(?:^|[-_/\\s])[vV]?(\\d+(?:\\.\\d+){0,2}(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?)$"
 
@@ -43,37 +42,28 @@ func cache_key() -> String:
 
 
 func list_releases(etag: String = "") -> Dictionary:
-	var result := { "ok": false, "error": "", "not_modified": false, "etag": etag, "releases": [] }
 	var headers := _api_headers()
 	if etag != "":
 		headers.append("If-None-Match: %s" % etag)
 	var response: Dictionary = await _http.get_json("%s/repos/%s/releases?per_page=%d" % [API, repo, PER_PAGE], headers)
 	if not response["ok"]:
-		result["error"] = response["error"]
-		return result
+		return listing_error(response["error"])
 	var code: int = response["code"]
 	var response_headers: Dictionary = response["headers"]
 	if code == 304:
-		result["ok"] = true
-		result["not_modified"] = true
-		return result
+		return { "ok": true, "error": "", "not_modified": true, "etag": etag, "releases": [] }
 	if code != 200:
-		result["error"] = _status_error(code, response_headers)
-		return result
+		return listing_error(_status_error(code, response_headers))
 	var data: Variant = response["data"]
 	if typeof(data) != TYPE_ARRAY:
-		result["error"] = "Unexpected GitHub answer for %s." % repo
-		return result
+		return listing_error("Unexpected GitHub answer for %s." % repo)
 	var list: Array[Dictionary] = []
 	for item: Variant in data:
 		if typeof(item) == TYPE_DICTIONARY:
 			var release := _parse_release(item)
 			if not release.is_empty():
 				list.append(release)
-	result["ok"] = true
-	result["etag"] = str(response_headers.get("etag", ""))
-	result["releases"] = list
-	return result
+	return { "ok": true, "error": "", "not_modified": false, "etag": str(response_headers.get("etag", "")), "releases": list }
 
 
 func fetch(version: String, dest_dir: String) -> Dictionary:
@@ -99,14 +89,11 @@ func _parse_release(item: Dictionary) -> Dictionary:
 	var version := LoadoutVersion.parse(found.get_string(1)) if found != null else null
 	if version == null:
 		return {}
-	var notes := str(item.get("body", "") if item.get("body") != null else "")
-	if notes.length() > MAX_NOTES:
-		notes = notes.left(MAX_NOTES) + "…"
 	return {
 		"version": str(version),
 		"tag": tag,
 		"prerelease": bool(item.get("prerelease", false)) or version.is_prerelease(),
-		"notes": notes,
+		"notes": trim_notes(item.get("body")),
 		"url": str(item.get("html_url", "")),
 		"download_url": _package_url(item),
 	}

@@ -52,11 +52,14 @@ static func is_valid_range(range_text: String) -> bool:
 
 ## Highest version from versions that matches range_text, returned in its original form ("" if none).
 static func max_satisfying(versions: PackedStringArray, range_text: String) -> String:
+	var bounds := _bounds(range_text)
 	var best_text := ""
 	var best: LoadoutVersion = null
+	if not bounds["ok"]:
+		return best_text
 	for text in versions:
 		var version := parse(text)
-		if version == null or not version.matches(range_text):
+		if version == null or not version._within(bounds):
 			continue
 		if best == null or version.compare(best) > 0:
 			best = version
@@ -66,8 +69,11 @@ static func max_satisfying(versions: PackedStringArray, range_text: String) -> S
 
 func matches(range_text: String) -> bool:
 	var bounds := _bounds(range_text)
-	if not bounds["ok"]:
-		return false
+	return bounds["ok"] and _within(bounds)
+
+
+## Whether this version lies within bounds from _bounds() (which must be ok).
+func _within(bounds: Dictionary) -> bool:
 	var low: LoadoutVersion = bounds["min"]
 	var high: LoadoutVersion = bounds["max"]
 	if is_prerelease():
@@ -84,9 +90,12 @@ func matches(range_text: String) -> bool:
 
 ## -1, 0 or 1. Build metadata is ignored, prerelease precedence follows semver.
 func compare(other: LoadoutVersion) -> int:
-	for pair: Array in [[major, other.major], [minor, other.minor], [patch, other.patch]]:
-		if pair[0] != pair[1]:
-			return -1 if pair[0] < pair[1] else 1
+	if major != other.major:
+		return signi(major - other.major)
+	if minor != other.minor:
+		return signi(minor - other.minor)
+	if patch != other.patch:
+		return signi(patch - other.patch)
 	return _compare_prerelease(prerelease, other.prerelease)
 
 
@@ -127,14 +136,9 @@ static func _bounds(range_text: String) -> Dictionary:
 				high.minor = low.minor + 1
 			else:
 				high.patch = low.patch + 1
-		"~":
-			high.major = low.major
-			if low.precision == 1:
-				high.major = low.major + 1
-			else:
-				high.minor = low.minor + 1
 		_:
-			if low.precision == 3:
+			# "~1.2.3" and the partial "1.2" / "1" share the bound; a full version is exact.
+			if operator == "" and low.precision == 3:
 				return { "ok": true, "min": low, "max": low, "exact": true }
 			high.major = low.major
 			if low.precision == 1:
@@ -146,9 +150,7 @@ static func _bounds(range_text: String) -> Dictionary:
 
 static func _compare_prerelease(a: PackedStringArray, b: PackedStringArray) -> int:
 	if a.is_empty() or b.is_empty():
-		if a.is_empty() and b.is_empty():
-			return 0
-		return 1 if a.is_empty() else -1
+		return signi(int(a.is_empty()) - int(b.is_empty()))
 	for i in mini(a.size(), b.size()):
 		var a_numeric := a[i].is_valid_int()
 		var b_numeric := b[i].is_valid_int()

@@ -15,11 +15,9 @@ const BINARY_SNIFF_BYTES := 8000
 ## Recursively copies the contents of src into dst (dst is created if missing).
 ## Files and folders whose name is in exclude are skipped at any depth.
 static func copy_dir(src: String, dst: String, exclude: PackedStringArray = []) -> Error:
-	var dir := DirAccess.open(src)
+	var dir := _open(src)
 	if dir == null:
 		return DirAccess.get_open_error()
-	dir.include_hidden = true
-	dir.include_navigational = false
 	var err := DirAccess.make_dir_recursive_absolute(dst)
 	if err != OK:
 		return err
@@ -42,11 +40,9 @@ static func copy_dir(src: String, dst: String, exclude: PackedStringArray = []) 
 static func remove_dir(path: String) -> Error:
 	if not DirAccess.dir_exists_absolute(path):
 		return OK
-	var dir := DirAccess.open(path)
+	var dir := _open(path)
 	if dir == null:
 		return DirAccess.get_open_error()
-	dir.include_hidden = true
-	dir.include_navigational = false
 	var err: Error = OK
 	for file_name: String in dir.get_files():
 		err = DirAccess.remove_absolute(path.path_join(file_name))
@@ -88,12 +84,19 @@ static func hash_dir(path: String) -> String:
 	return "sha256:" + context.finish().hex_encode()
 
 
+## Directory handle that lists hidden files and no "." or "..", null when it cannot be opened.
+static func _open(path: String) -> DirAccess:
+	var dir := DirAccess.open(path)
+	if dir != null:
+		dir.include_hidden = true
+		dir.include_navigational = false
+	return dir
+
+
 static func _collect_files(root: String, relative: String, files: PackedStringArray) -> void:
-	var dir := DirAccess.open(root.path_join(relative))
+	var dir := _open(root.path_join(relative))
 	if dir == null:
 		return
-	dir.include_hidden = true
-	dir.include_navigational = false
 	for file_name: String in dir.get_files():
 		files.append(relative.path_join(file_name) if relative != "" else file_name)
 	for sub_dir: String in dir.get_directories():

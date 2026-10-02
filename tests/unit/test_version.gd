@@ -110,3 +110,15 @@ func test_max_satisfying() -> void:
 	check_eq(Version.max_satisfying(versions, "*"), "2.0.0", "star skips prerelease")
 	check_eq(Version.max_satisfying(versions, "~1.4.0"), "1.4.2", "tilde")
 	check_eq(Version.max_satisfying(versions, "^3.0.0"), "", "nothing matches")
+
+
+func test_max_satisfying_with_invalid_range() -> void:
+	check_eq(Version.max_satisfying(["1.0.0", "2.0.0"], "^abc"), "", "an invalid range matches nothing")
+
+
+func test_compare_orders_prereleases_below_the_release() -> void:
+	check_eq(_cmp("1.0.0-rc.1", "1.0.0"), -1, "prerelease below release")
+	check_eq(_cmp("1.0.0", "1.0.0-rc.1"), 1, "release above prerelease")
+	check_eq(_cmp("1.0.0", "1.0.0"), 0, "equal")
+	check_eq(_cmp("1.2.0", "1.10.0"), -1, "numeric minor")
+

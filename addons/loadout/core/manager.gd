@@ -184,16 +184,16 @@ func install_selected(ids: PackedStringArray, ignore: PackedStringArray = []) ->
 ## Returns the same summary as install_missing().
 func use_package_folders(folders: Dictionary) -> Dictionary:
 	var ids: PackedStringArray = []
-	var summary := { "installed": PackedStringArray(), "failed": {}, "folders": {}, "restart_recommended": false }
+	var failed := {}
 	for id: String in folders:
 		var error := await set_registry_folder(id, folders[id])
 		if error != "":
-			summary["failed"][id] = error
+			failed[id] = error
 		else:
 			ids.append(id)
-	var installed := await _install_all(ids)
-	installed["failed"].merge(summary["failed"])
-	return installed
+	var summary := await _install_all(ids)
+	summary["failed"].merge(failed)
+	return summary
 
 
 func _install_all(ids: PackedStringArray) -> Dictionary:
@@ -224,17 +224,19 @@ func available_versions(id: String) -> Array[Dictionary]:
 	var source: LoadoutSource = _sources.get(id)
 	if state == null or state.entry == null or source == null:
 		return list
+	var parsed: Dictionary[String, LoadoutVersion] = {}
 	for release in source.releases:
 		var version := str(release.get("version", ""))
-		if LoadoutVersion.parse(version) == null:
+		var number := LoadoutVersion.parse(version)
+		if number == null:
 			continue
+		parsed[version] = number
 		list.append({
 			"version": version, "tag": str(release.get("tag", version)), "prerelease": bool(release.get("prerelease", false)),
 			"notes": str(release.get("notes", "")), "url": str(release.get("url", "")),
-			"in_range": LoadoutVersion.satisfies(version, state.entry.version_range),
+			"in_range": number.matches(state.entry.version_range),
 		})
-	list.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		return LoadoutVersion.parse(a["version"]).compare(LoadoutVersion.parse(b["version"])) > 0)
+	list.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return parsed[a["version"]].compare(parsed[b["version"]]) > 0)
 	return list
 
 
@@ -305,7 +307,7 @@ func export_registry(path: String) -> Error:
 func import_registry(path: String) -> Dictionary:
 	var summary := { "ok": false, "error": "", "added": PackedStringArray(), "skipped": {}, "warnings": PackedStringArray() }
 	if not _registry_ok:
-		summary["error"] = "The registry cannot be read, nothing changed."
+		summary["error"] = REGISTRY_UNREADABLE
 		return summary
 	var loaded := LoadoutRegistry.load_file(path)
 	if loaded["ok"] and loaded["missing"]:

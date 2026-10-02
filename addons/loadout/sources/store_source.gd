@@ -9,7 +9,6 @@ extends LoadoutSource
 
 const API := "https://store.godotengine.org/api/v1"
 const ASSET_PAGE := "https://store.godotengine.org/asset/%s/"
-const MAX_NOTES := 4000
 const SEARCH_RESULTS := 20
 
 ## "publisher/slug"
@@ -40,22 +39,18 @@ func cache_key() -> String:
 
 
 func list_releases(_etag: String = "") -> Dictionary:
-	var result := { "ok": false, "error": "", "not_modified": false, "etag": "", "releases": [] }
 	var answer := await _fetch_release_data()
 	if not answer["ok"]:
-		result["error"] = answer["error"]
-		return result
+		return listing_error(answer["error"])
 	var list: Array[Dictionary] = []
 	for item: Dictionary in answer["data"]:
 		var tag := str(item.get("version", ""))
 		var version := LoadoutVersion.parse(tag)
 		if version == null:
 			continue
-		var notes := str(item.get("notes", "") if item.get("notes") != null else "")
-		if notes == "" and item.get("changes_bbcode") != null:
-			notes = str(item.get("changes_bbcode"))
-		if notes.length() > MAX_NOTES:
-			notes = notes.left(MAX_NOTES) + "…"
+		var notes := trim_notes(item.get("notes"))
+		if notes == "":
+			notes = trim_notes(item.get("changes_bbcode"))
 		list.append({
 			"version": str(version),
 			"tag": tag,
@@ -65,9 +60,7 @@ func list_releases(_etag: String = "") -> Dictionary:
 			"download_url": "",
 			"release_id": int(item.get("id", 0)),
 		})
-	result["ok"] = true
-	result["releases"] = list
-	return result
+	return { "ok": true, "error": "", "not_modified": false, "etag": "", "releases": list }
 
 
 func fetch(version: String, dest_dir: String) -> Dictionary:
@@ -78,14 +71,14 @@ func fetch(version: String, dest_dir: String) -> Dictionary:
 	var answer := await _fetch_release_data()
 	if not answer["ok"]:
 		return { "ok": false, "error": answer["error"], "path": "" }
-	var url := ""
-	var found := false
+	var current: Dictionary = {}
 	for item: Dictionary in answer["data"]:
 		if int(item.get("id", -1)) == int(release.get("release_id", -2)):
-			found = true
-			url = str(item.get("download_url", "")) if item.get("download_url") != null else ""
-	if not found:
+			current = item
+			break
+	if current.is_empty():
 		return { "ok": false, "error": "The Asset Store no longer offers %s %s." % [asset, version], "path": "" }
+	var url := "" if current.get("download_url") == null else str(current["download_url"])
 	if url == "":
 		return { "ok": false, "error": "%s %s has no public download (paid assets are not supported)." % [asset, version], "path": "" }
 	var response: Dictionary = await _http.get_request(url, default_headers())

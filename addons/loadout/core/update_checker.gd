@@ -9,7 +9,6 @@ extends RefCounted
 ## Local sources are cheap and read every time.
 
 const JsonStore := preload("../util/json_store.gd")
-const Fs := preload("../util/fs.gd")
 
 const SCHEMA := 1
 const FILE_NAME := "loadout_cache.json"
@@ -69,11 +68,6 @@ func is_due(key: String) -> bool:
 	return _now.call() - int(entry.get("checked_at", 0)) >= CHECK_INTERVAL_S
 
 
-## Unix time of the last check of the source, 0 when never checked.
-func checked_at(key: String) -> int:
-	return int((_sources.get(key, {}) as Dictionary).get("checked_at", 0))
-
-
 ## Fills source.releases from the cache or the source. Returns { "ok": bool, "error": String,
 ## "warning": String, "from_cache": bool, "checked": bool }. ok is false only when no releases
 ## are known at all.
@@ -100,6 +94,7 @@ func load_releases(source: LoadoutSource, force: bool = false) -> Dictionary:
 	var answer: Dictionary = await source.list_releases(str(entry.get("etag", "")))
 	entry["checked_at"] = _now.call()
 	_dirty = true
+	_sources[key] = entry
 	if answer["ok"]:
 		if not answer["not_modified"]:
 			entry["releases"] = answer["releases"]
@@ -107,24 +102,16 @@ func load_releases(source: LoadoutSource, force: bool = false) -> Dictionary:
 		entry["etag"] = answer["etag"]
 		entry["updated_at"] = entry["checked_at"]
 		entry["last_error"] = ""
-		_sources[key] = entry
-		source.releases.assign(cached)
-		result["ok"] = not cached.is_empty()
-		result["error"] = "" if result["ok"] else "The source has no releases."
 		result["checked"] = true
-		return result
-
-	entry["last_error"] = answer["error"]
-	_sources[key] = entry
-	source.releases.assign(cached)
-	if cached.is_empty():
+		result["error"] = "" if not cached.is_empty() else "The source has no releases."
+	else:
+		entry["last_error"] = answer["error"]
 		result["error"] = answer["error"]
-		return result
-	result["ok"] = true
-	result["from_cache"] = true
-	result["warning"] = "%s Using data from %s." % [answer["error"], _date(int(entry.get("updated_at", 0)))]
+		# Stale data beats none: the releases from the last good answer, with a warning.
+		if not cached.is_empty():
+			result["from_cache"] = true
+			result["warning"] = "%s Using data from %s." % [answer["error"], Time.get_date_string_from_unix_time(int(entry.get("updated_at", 0)))]
+			result["error"] = ""
+	source.releases.assign(cached)
+	result["ok"] = not cached.is_empty()
 	return result
-
-
-func _date(unix_time: int) -> String:
-	return Time.get_date_string_from_unix_time(unix_time)

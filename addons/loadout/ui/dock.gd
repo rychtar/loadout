@@ -308,14 +308,14 @@ func _fit_columns(reset: bool = false) -> void:
 		_columns_fitted = true
 	var font := _tree.get_theme_font("font")
 	var font_size := _tree.get_theme_font_size("font_size")
-	var padding := roundi(COLUMN_PADDING * EditorInterface.get_editor_scale())
+	var scale := EditorInterface.get_editor_scale()
+	var padding := roundi(COLUMN_PADDING * scale)
 	var status_texts: PackedStringArray = ["Status"]
 	for text: String in STATUS_TEXT.values():
 		status_texts.append(text)
 	var version_texts: PackedStringArray = ["Version"]
 	for state in manager.states:
 		version_texts.append(_version_text(state))
-	var scale := EditorInterface.get_editor_scale()
 	var widths := fit_widths(_widest(font, font_size, status_texts) + padding, _widest(font, font_size, version_texts) + padding,
 			roundi(_tree.size.x), roundi(MIN_COLUMN * scale), roundi(MIN_NAME_COLUMN * scale))
 	_status_width = widths.x
@@ -394,9 +394,7 @@ func _place_grips() -> void:
 
 
 func _rebuild_unregistered() -> void:
-	for child in _unregistered_rows.get_children():
-		_unregistered_rows.remove_child(child)
-		child.queue_free()
+	_clear(_unregistered_rows)
 	for info: Dictionary in manager.unregistered:
 		var row := HBoxContainer.new()
 		var label := Label.new()
@@ -416,10 +414,8 @@ func _rebuild_unregistered() -> void:
 
 
 func _update_detail() -> void:
-	for container: Container in [_detail_grid, _detail_actions]:
-		for child in container.get_children():
-			container.remove_child(child)
-			child.queue_free()
+	_clear(_detail_grid)
+	_clear(_detail_actions)
 	var state := manager.get_state(_selected_id)
 	if state == null:
 		_detail_title.text = ""
@@ -656,6 +652,13 @@ func _handle_result(result: Variant) -> void:
 func _offer_restart() -> void:
 	_ask("The new version removed some classes (class_name). The editor keeps listing them until it restarts. Restart now?",
 			"Restart editor", func() -> void: EditorInterface.restart_editor(true))
+
+
+## Removes the children at once (queue_free alone leaves them in the layout until the frame ends).
+func _clear(container: Node) -> void:
+	for child in container.get_children():
+		container.remove_child(child)
+		child.queue_free()
 
 
 func _set_busy(busy: bool) -> void:

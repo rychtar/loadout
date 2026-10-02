@@ -3,6 +3,7 @@ extends LoadoutEditorBridge
 
 ## LoadoutEditorBridge backed by the running Godot editor (behaviour verified in F0, see CLAUDE.md).
 
+const Fs := preload("../util/fs.gd")
 const Log := preload("../util/log.gd")
 
 const ADDONS_DIR := "res://addons"
@@ -56,8 +57,9 @@ func scan() -> bool:
 
 func refresh_scripts(dir: String) -> Error:
 	var result: Error = OK
-	for path in _script_files(dir):
-		if not ResourceLoader.has_cached(path):
+	for relative in Fs.list_files(dir):
+		var path := dir.path_join(relative)
+		if relative.get_extension() != "gd" or not ResourceLoader.has_cached(path):
 			continue
 		var script := load(path) as Script
 		if script == null:
@@ -105,16 +107,3 @@ func _entry_script_path(dir: String) -> String:
 	if cfg.load(dir.path_join("plugin.cfg")) != OK:
 		return ""
 	return dir.path_join(str(cfg.get_value("plugin", "script", "")))
-
-
-func _script_files(dir: String) -> PackedStringArray:
-	var files: PackedStringArray = []
-	var directory := DirAccess.open(dir)
-	if directory == null:
-		return files
-	for file_name in directory.get_files():
-		if file_name.get_extension() == "gd":
-			files.append(dir.path_join(file_name))
-	for sub_dir in directory.get_directories():
-		files.append_array(_script_files(dir.path_join(sub_dir)))
-	return files

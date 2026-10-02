@@ -9,6 +9,8 @@ const Zip := preload("../util/zip.gd")
 const Fs := preload("../util/fs.gd")
 
 const USER_AGENT := "Loadout (Godot editor plugin)"
+## Release notes are cut to this many characters.
+const MAX_NOTES := 4000
 
 ## Remote sources list their releases with list_releases(); LoadoutUpdateChecker caches that list
 ## (once a day, ETag) and puts it into `releases`, which the other methods then use.
@@ -36,7 +38,7 @@ func cache_key() -> String:
 ## Lists available releases. etag of the previous answer allows a cheap "not modified" reply.
 ## Returns { "ok", "error", "not_modified": bool, "etag": String, "releases": Array[Dictionary] }.
 func list_releases(_etag: String = "") -> Dictionary:
-	return { "ok": false, "error": "The source cannot list versions.", "not_modified": false, "etag": "", "releases": [] }
+	return listing_error("The source cannot list versions.")
 
 
 ## Highest known version within version_range.
@@ -75,6 +77,17 @@ func get_plugin_name() -> String:
 ## plugin's folder name inside the package), "warning": String (optional) } where path holds plugin.cfg.
 func fetch(_version: String, _dest_dir: String) -> Dictionary:
 	return { "ok": false, "error": "The source cannot download.", "path": "" }
+
+
+## A failed list_releases() answer.
+static func listing_error(error: String) -> Dictionary:
+	return { "ok": false, "error": error, "not_modified": false, "etag": "", "releases": [] }
+
+
+## Release notes from a JSON value (null becomes ""), cut to limit characters.
+static func trim_notes(value: Variant, limit: int = MAX_NOTES) -> String:
+	var notes := "" if value == null else str(value)
+	return notes.left(limit) + "…" if notes.length() > limit else notes
 
 
 ## Headers every request to a remote source carries.

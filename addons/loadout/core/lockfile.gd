@@ -62,16 +62,8 @@ static func from_dict(data: Variant) -> Dictionary:
 static func load_file(path: String = DEFAULT_PATH) -> Dictionary:
 	var read := JsonStore.read(path, SCHEMA)
 	var result := { "ok": false, "error": read["error"], "lockfile": null, "missing": read["missing"], "backup_path": read["backup_path"] }
-	if not read["ok"]:
-		return result
-	if read["missing"]:
-		result["ok"] = true
-		result["lockfile"] = LoadoutLockfile.new()
-		return result
-	var parsed := from_dict(read["data"])
-	result["ok"] = parsed["ok"]
-	result["error"] = parsed["error"]
-	result["lockfile"] = parsed["lockfile"]
+	if read["ok"]:
+		result.merge({ "ok": true, "error": "", "lockfile": LoadoutLockfile.new() } if read["missing"] else from_dict(read["data"]), true)
 	return result
 
 

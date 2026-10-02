@@ -9,7 +9,6 @@ extends LoadoutSource
 
 const API := "https://godotengine.org/asset-library/api"
 const ASSET_PAGE := "https://godotengine.org/asset-library/asset/%s"
-const MAX_NOTES := 4000
 const SEARCH_RESULTS := 20
 
 var asset_id: String
@@ -41,45 +40,35 @@ func cache_key() -> String:
 
 
 func list_releases(_etag: String = "") -> Dictionary:
-	var result := { "ok": false, "error": "", "not_modified": false, "etag": "", "releases": [] }
 	var response: Dictionary = await _http.get_json("%s/asset/%s" % [API, asset_id], default_headers())
 	if not response["ok"]:
-		result["error"] = response["error"]
-		return result
+		return listing_error(response["error"])
+	if response["code"] == 404:
+		return listing_error("Asset #%s not found in the Asset Library (code 404)." % asset_id)
 	if response["code"] != 200:
-		result["error"] = "Asset #%s not found in the Asset Library (code %d)." % [asset_id, response["code"]] \
-				if response["code"] == 404 else "The Asset Library answered with code %d." % response["code"]
-		return result
+		return listing_error("The Asset Library answered with code %d." % response["code"])
 	var asset: Variant = response["data"]
 	if typeof(asset) != TYPE_DICTIONARY:
-		result["error"] = "Unexpected Asset Library answer for #%s." % asset_id
-		return result
+		return listing_error("Unexpected Asset Library answer for #%s." % asset_id)
 	if str(asset.get("type", "addon")) != "addon":
-		result["error"] = "Asset #%s is a project, not a plugin." % asset_id
-		return result
+		return listing_error("Asset #%s is a project, not a plugin." % asset_id)
 	var download_url := str(asset.get("download_url", ""))
 	if download_url == "":
-		result["error"] = "Asset #%s has no download link." % asset_id
-		return result
+		return listing_error("Asset #%s has no download link." % asset_id)
 	var version_text := str(asset.get("version_string", ""))
 	var version := LoadoutVersion.parse(version_text)
 	var version_string := str(version) if version != null else "0.0.%d" % str(asset.get("version", "0")).to_int()
-	var notes := str(asset.get("description", ""))
-	if notes.length() > MAX_NOTES:
-		notes = notes.left(MAX_NOTES) + "…"
-	result["ok"] = true
-	result["releases"] = [{
+	return { "ok": true, "error": "", "not_modified": false, "etag": "", "releases": [{
 		"version": version_string,
 		"tag": version_text,
 		"prerelease": version != null and version.is_prerelease(),
-		"notes": notes,
+		"notes": trim_notes(asset.get("description")),
 		"url": ASSET_PAGE % asset_id,
 		"download_url": download_url,
 		"sha256": str(asset.get("download_hash", "")).to_lower(),
 		"title": str(asset.get("title", "")),
 		"godot_version": str(asset.get("godot_version", "")),
-	}]
-	return result
+	}] }
 
 
 func fetch(version: String, dest_dir: String) -> Dictionary:

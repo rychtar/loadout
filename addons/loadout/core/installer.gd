@@ -70,11 +70,7 @@ func check_overwrite(entry: LoadoutRegistry.Entry, lock_entry: LoadoutLockfile.E
 ## "restart_recommended", "needs_confirmation" }. The caller records "hash" in the lock.
 func install(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: String,
 		lock_entry: LoadoutLockfile.Entry = null, force: bool = false, enable: bool = true) -> Dictionary:
-	var result := {
-		"ok": false, "error": "", "id": entry.id, "from": installed_version(entry), "to": version,
-		"hash": "", "backup_path": "", "restored": false, "restart_recommended": false, "needs_confirmation": "",
-		"warning": "", "package_folder": "",
-	}
+	var result := _new_result(entry, version)
 	if not force:
 		var reason := check_overwrite(entry, lock_entry)
 		if reason != "":
@@ -123,11 +119,8 @@ func install(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: Strin
 ## the new version loads after the editor restart that must follow right away.
 ## Returns the same dictionary as install() plus "restart_required": true on success.
 func self_update(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: String) -> Dictionary:
-	var result := {
-		"ok": false, "error": "", "id": entry.id, "from": installed_version(entry), "to": version,
-		"hash": "", "backup_path": "", "restored": false, "restart_recommended": false,
-		"needs_confirmation": "", "restart_required": false,
-	}
+	var result := _new_result(entry, version)
+	result["restart_required"] = false
 	var staging := staging_root.path_join(entry.id)
 	var fetched: Dictionary = await _stage(entry, source, version)
 	if not fetched["ok"]:
@@ -209,16 +202,10 @@ func _install_fresh(entry: LoadoutRegistry.Entry, staged: String, enable: bool, 
 		Fs.remove_dir(target)
 		result["error"] = "Copying to %s failed: %s" % [target, error_string(err)]
 		return
-	if not await editor.scan():
+	var problem := await _check_new_files(target, "Plugin %s" % entry.id)
+	if problem != "":
 		await _discard(entry)
-		result["error"] = "The filesystem scan did not finish in time."
-		return
-	err = editor.refresh_scripts(target)
-	if err == OK:
-		err = editor.validate_plugin(target)
-	if err != OK:
-		await _discard(entry)
-		result["error"] = "Plugin %s has a broken script (%s)." % [entry.id, error_string(err)]
+		result["error"] = problem
 		return
 	if enable:
 		await editor.set_plugin_enabled(entry.folder, true)
@@ -255,14 +242,9 @@ func _replace(entry: LoadoutRegistry.Entry, staged: String, result: Dictionary) 
 		await _fail_and_restore(entry, backup, was_enabled, result, "Copying to %s failed: %s" % [target, error_string(err)])
 		return
 	# 4. Scan, refresh stale scripts, validate before enabling
-	if not await editor.scan():
-		await _fail_and_restore(entry, backup, was_enabled, result, "The filesystem scan did not finish in time.")
-		return
-	err = editor.refresh_scripts(target)
-	if err == OK:
-		err = editor.validate_plugin(target)
-	if err != OK:
-		await _fail_and_restore(entry, backup, was_enabled, result, "The new version of %s has a broken script (%s)." % [entry.id, error_string(err)])
+	var problem := await _check_new_files(target, "The new version of %s" % entry.id)
+	if problem != "":
+		await _fail_and_restore(entry, backup, was_enabled, result, problem)
 		return
 	# 5. Enable and check it runs
 	if was_enabled:
@@ -273,6 +255,19 @@ func _replace(entry: LoadoutRegistry.Entry, staged: String, result: Dictionary) 
 	editor.save_project_settings()
 	result["restart_recommended"] = not editor.stale_classes(target).is_empty()
 	result["ok"] = true
+
+
+## Step 4: scans the new files in, reloads stale scripts and validates the entry script. Returns ""
+## or the problem; subject names what was installed ("Plugin x").
+func _check_new_files(target: String, subject: String) -> String:
+	if not await editor.scan():
+		return "The filesystem scan did not finish in time."
+	var err := editor.refresh_scripts(target)
+	if err == OK:
+		err = editor.validate_plugin(target)
+	if err != OK:
+		return "%s has a broken script (%s)." % [subject, error_string(err)]
+	return ""
 
 
 # 6. Restore the backup after a failed replace.
@@ -338,6 +333,14 @@ func _copy_fresh(src: String, dst: String) -> Error:
 	if err != OK:
 		return err
 	return Fs.copy_dir(src, dst)
+
+
+func _new_result(entry: LoadoutRegistry.Entry, version: String) -> Dictionary:
+	return {
+		"ok": false, "error": "", "id": entry.id, "from": installed_version(entry), "to": version,
+		"hash": "", "backup_path": "", "restored": false, "restart_recommended": false, "needs_confirmation": "",
+		"warning": "", "package_folder": "",
+	}
 
 
 func _fail(result: Dictionary, error: String) -> Dictionary:
