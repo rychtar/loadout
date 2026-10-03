@@ -666,6 +666,11 @@ func _set_busy(busy: bool) -> void:
 	for child in _detail_actions.get_children():
 		if child is Button:
 			child.disabled = busy
+	# Rows rebuilt while busy (a refresh during an action) were created disabled, so they are reset here too.
+	for row in _unregistered_rows.get_children():
+		for child in row.get_children():
+			if child is Button:
+				child.disabled = busy
 
 
 func _ask(text: String, ok_text: String, on_confirm: Callable, cancel_text: String = "Cancel") -> void:
