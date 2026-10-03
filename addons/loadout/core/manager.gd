@@ -255,28 +255,29 @@ func uninstall(id: String) -> Dictionary:
 
 ## The lock edits below recompute the state (may query the source), always await them.
 func set_pinned(id: String, pinned: bool) -> Error:
-	if busy:
-		return ERR_BUSY
-	if not _lock_ok or not lockfile.set_pinned(id, pinned):
+	var err := _lock_edit_error()
+	if err != OK:
+		return err
+	if not lockfile.set_pinned(id, pinned):
 		return ERR_DOES_NOT_EXIST
 	return await _save_and_update(id)
 
 
 func set_ignored(id: String, ignored: bool) -> Error:
-	if busy:
-		return ERR_BUSY
-	if not _lock_ok:
-		return ERR_FILE_CORRUPT
+	var err := _lock_edit_error()
+	if err != OK:
+		return err
 	lockfile.set_ignored(id, ignored)
 	return await _save_and_update(id)
 
 
 ## Accepts the current folder content (manual edits or a hand-installed copy) as installed.
 func adopt(id: String) -> Error:
-	if busy:
-		return ERR_BUSY
+	var err := _lock_edit_error()
+	if err != OK:
+		return err
 	var state := get_state(id)
-	if not _lock_ok or state == null or state.entry == null:
+	if state == null or state.entry == null:
 		return ERR_DOES_NOT_EXIST
 	var dir := installer.target_dir(state.entry)
 	if not DirAccess.dir_exists_absolute(dir):
@@ -287,9 +288,10 @@ func adopt(id: String) -> Error:
 
 ## Drops a lock entry of a plugin that is no longer in the registry (files stay).
 func forget(id: String) -> Error:
-	if busy:
-		return ERR_BUSY
-	if not _lock_ok or not lockfile.remove(id):
+	var err := _lock_edit_error()
+	if err != OK:
+		return err
+	if not lockfile.remove(id):
 		return ERR_DOES_NOT_EXIST
 	return await _save_and_update(id)
 
@@ -649,6 +651,13 @@ func _refuse_action(state: PluginState) -> String:
 	if not _lock_ok:
 		return "The lock cannot be read, nothing changed."
 	return ""
+
+
+## ERR_BUSY while an action runs, ERR_FILE_CORRUPT when the lock cannot be read, otherwise OK.
+func _lock_edit_error() -> Error:
+	if busy:
+		return ERR_BUSY
+	return OK if _lock_ok else ERR_FILE_CORRUPT
 
 
 func _save_and_update(id: String) -> Error:

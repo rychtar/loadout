@@ -493,10 +493,7 @@ func _confirm_update(state: LoadoutManager.PluginState) -> void:
 func _notes_text(state: LoadoutManager.PluginState) -> String:
 	var text := ""
 	if state.release_notes != "":
-		var notes := state.release_notes.strip_edges()
-		if notes.length() > NOTES_PREVIEW:
-			notes = notes.left(NOTES_PREVIEW) + "…"
-		text += "\n\nRelease notes:\n%s" % notes
+		text += "\n\nRelease notes:\n%s" % LoadoutSource.trim_notes(state.release_notes.strip_edges(), NOTES_PREVIEW)
 	if state.release_url != "":
 		text += "\n\n%s" % state.release_url
 	return text

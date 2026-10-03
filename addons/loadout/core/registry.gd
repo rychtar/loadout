@@ -96,7 +96,7 @@ static func parse_entry(data: Variant) -> Dictionary:
 		return _entry_error(id, "auto_install must be true or false")
 	entry.auto_install = auto_install
 	var source := _parse_source(data.get("source"))
-	if not source["ok"]:
+	if source["error"] != "":
 		return _entry_error(id, source["error"])
 	entry.source = source["source"]
 	return { "ok": true, "error": "", "entry": entry }
@@ -196,25 +196,26 @@ func remove_entry(id: String) -> bool:
 	return false
 
 
+## Returns { "error": String, "source": Dictionary } (source only when error is "").
 static func _parse_source(data: Variant) -> Dictionary:
 	if typeof(data) != TYPE_DICTIONARY:
-		return { "ok": false, "error": "source missing" }
+		return { "error": "source missing" }
 	match data.get("type"):
 		SOURCE_LOCAL:
 			var path: Variant = data.get("path", "")
 			if typeof(path) != TYPE_STRING or not path.is_absolute_path() or path.contains("://"):
-				return { "ok": false, "error": "a local source needs an absolute path" }
-			return { "ok": true, "source": { "type": SOURCE_LOCAL, "path": path } }
+				return { "error": "a local source needs an absolute path" }
+			return { "error": "", "source": { "type": SOURCE_LOCAL, "path": path } }
 		SOURCE_GITHUB:
 			var repo: Variant = data.get("repo", "")
 			if typeof(repo) != TYPE_STRING:
-				return { "ok": false, "error": "invalid GitHub repository" }
+				return { "error": "invalid GitHub repository" }
 			if repo.begins_with("http://"):
-				return { "ok": false, "error": "only HTTPS is allowed" }
+				return { "error": "only HTTPS is allowed" }
 			var normalized := _normalize_repo(repo)
 			if normalized == "":
-				return { "ok": false, "error": "invalid GitHub repository %s (expected owner/name)" % repo }
-			return { "ok": true, "source": { "type": SOURCE_GITHUB, "repo": normalized } }
+				return { "error": "invalid GitHub repository %s (expected owner/name)" % repo }
+			return { "error": "", "source": { "type": SOURCE_GITHUB, "repo": normalized } }
 		SOURCE_ASSETLIB:
 			var asset_id: Variant = data.get("asset_id", "")
 			if typeof(asset_id) == TYPE_FLOAT and is_equal_approx(asset_id, roundf(asset_id)):
@@ -222,19 +223,19 @@ static func _parse_source(data: Variant) -> Dictionary:
 			if typeof(asset_id) == TYPE_INT:
 				asset_id = str(asset_id)
 			if typeof(asset_id) != TYPE_STRING or not asset_id.is_valid_int() or asset_id.to_int() <= 0:
-				return { "ok": false, "error": "invalid Asset Library asset id %s" % var_to_str(asset_id) }
-			return { "ok": true, "source": { "type": SOURCE_ASSETLIB, "asset_id": asset_id } }
+				return { "error": "invalid Asset Library asset id %s" % var_to_str(asset_id) }
+			return { "error": "", "source": { "type": SOURCE_ASSETLIB, "asset_id": asset_id } }
 		SOURCE_STORE:
 			var asset: Variant = data.get("asset", "")
 			if typeof(asset) != TYPE_STRING:
-				return { "ok": false, "error": "invalid Asset Store asset" }
+				return { "error": "invalid Asset Store asset" }
 			var text: String = asset.strip_edges()
 			if text.begins_with(_STORE_URL_PREFIX):
 				text = text.trim_prefix(_STORE_URL_PREFIX).trim_suffix("/")
 			if not _matches(_STORE_ASSET_PATTERN, text):
-				return { "ok": false, "error": "invalid Asset Store asset %s (expected publisher/slug)" % asset }
-			return { "ok": true, "source": { "type": SOURCE_STORE, "asset": text } }
-	return { "ok": false, "error": "unknown source type %s" % var_to_str(data.get("type")) }
+				return { "error": "invalid Asset Store asset %s (expected publisher/slug)" % asset }
+			return { "error": "", "source": { "type": SOURCE_STORE, "asset": text } }
+	return { "error": "unknown source type %s" % var_to_str(data.get("type")) }
 
 
 static func _normalize_repo(repo: String) -> String:

@@ -74,13 +74,10 @@ func list_releases(_etag: String = "") -> Dictionary:
 func fetch(version: String, dest_dir: String) -> Dictionary:
 	var release := get_release(version)
 	if release.is_empty():
-		return { "ok": false, "error": "The Asset Library only offers the current version of asset #%s, not %s." % [asset_id, version], "path": "" }
-	var url := str(release.get("download_url", ""))
-	var response: Dictionary = await _http.get_request(url, default_headers())
+		return fetch_error("The Asset Library only offers the current version of asset #%s, not %s." % [asset_id, version])
+	var response: Dictionary = await _download(_http, str(release.get("download_url", "")))
 	if not response["ok"]:
-		return { "ok": false, "error": response["error"], "path": "" }
-	if response["code"] != 200:
-		return { "ok": false, "error": "Download of %s failed (code %d)." % [url, response["code"]], "path": "" }
+		return response
 	var body: PackedByteArray = response["body"]
 	var expected := str(release.get("sha256", ""))
 	if expected != "":
@@ -88,7 +85,7 @@ func fetch(version: String, dest_dir: String) -> Dictionary:
 		context.start(HashingContext.HASH_SHA256)
 		context.update(body)
 		if context.finish().hex_encode() != expected:
-			return { "ok": false, "error": "The download does not match the SHA-256 listed in the Asset Library.", "path": "" }
+			return fetch_error("The download does not match the SHA-256 listed in the Asset Library.")
 	return _save_and_extract(body, folder, dest_dir)
 
 
@@ -97,16 +94,16 @@ func fetch(version: String, dest_dir: String) -> Dictionary:
 static func search(http: LoadoutHttp, query: String, godot_version: String) -> Dictionary:
 	var text := query.strip_edges()
 	if text == "":
-		return { "ok": false, "error": "Enter what to search for.", "results": [] }
+		return search_error("Enter what to search for.")
 	var url := "%s/asset?type=addon&filter=%s&godot_version=%s&max_results=%d" % [API, text.uri_encode(), godot_version, SEARCH_RESULTS]
 	var response: Dictionary = await http.get_json(url, default_headers())
 	if not response["ok"]:
-		return { "ok": false, "error": response["error"], "results": [] }
+		return search_error(response["error"])
 	if response["code"] != 200:
-		return { "ok": false, "error": "The Asset Library answered with code %d." % response["code"], "results": [] }
+		return search_error("The Asset Library answered with code %d." % response["code"])
 	var data: Variant = response["data"]
 	if typeof(data) != TYPE_DICTIONARY or typeof(data.get("result")) != TYPE_ARRAY:
-		return { "ok": false, "error": "Unexpected Asset Library answer.", "results": [] }
+		return search_error("Unexpected Asset Library answer.")
 	var results: Array[Dictionary] = []
 	for item: Variant in data["result"]:
 		if typeof(item) != TYPE_DICTIONARY:

@@ -72,9 +72,7 @@ func open_for(state: LoadoutManager.PluginState, versions: Array[Dictionary]) ->
 
 func _on_selected(index: int) -> void:
 	var release: Dictionary = _versions[index]
-	var notes := str(release["notes"]).strip_edges()
-	if notes.length() > NOTES_PREVIEW:
-		notes = notes.left(NOTES_PREVIEW) + "…"
+	var notes := LoadoutSource.trim_notes(str(release["notes"]).strip_edges(), NOTES_PREVIEW)
 	_notes.text = notes if notes != "" else "No release notes."
 	_pin_check.button_pressed = release["version"] != _newest_in_range
 	ok_button_text = "Install %s" % release["version"]

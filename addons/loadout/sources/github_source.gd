@@ -69,14 +69,9 @@ func list_releases(etag: String = "") -> Dictionary:
 func fetch(version: String, dest_dir: String) -> Dictionary:
 	var release := get_release(version)
 	if release.is_empty():
-		return { "ok": false, "error": "Release %s of %s is unknown, check for updates." % [version, repo], "path": "" }
-	var url := str(release.get("download_url", ""))
-	var response: Dictionary = await _http.get_request(url, default_headers())
-	if not response["ok"]:
-		return { "ok": false, "error": response["error"], "path": "" }
-	if response["code"] != 200:
-		return { "ok": false, "error": "Download of %s failed: %s" % [url, _status_error(response["code"], response["headers"])], "path": "" }
-	return _save_and_extract(response["body"], folder, dest_dir)
+		return fetch_error("Release %s of %s is unknown, check for updates." % [version, repo])
+	var response: Dictionary = await _download(_http, str(release.get("download_url", "")))
+	return _save_and_extract(response["body"], folder, dest_dir) if response["ok"] else response
 
 
 func _parse_release(item: Dictionary) -> Dictionary:

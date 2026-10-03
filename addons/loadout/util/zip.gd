@@ -18,18 +18,17 @@ static func extract_plugin(zip_path: String, folder: String, dest_dir: String) -
 		reader.close()
 		return { "ok": false, "error": prefix["error"] }
 	var root: String = prefix["prefix"]
+	var wanted: PackedStringArray = []
 	for path in files:
-		if not path.begins_with(root) or path.ends_with("/"):
-			continue
-		if not _is_safe(path.trim_prefix(root)):
-			reader.close()
-			return { "ok": false, "error": "The zip contains an unsafe path: %s" % path }
+		if path.begins_with(root) and not path.ends_with("/"):
+			if not _is_safe(path.trim_prefix(root)):
+				reader.close()
+				return { "ok": false, "error": "The zip contains an unsafe path: %s" % path }
+			wanted.append(path)
 	var err := DirAccess.make_dir_recursive_absolute(dest_dir)
-	for path in files:
+	for path in wanted:
 		if err != OK:
 			break
-		if not path.begins_with(root) or path.ends_with("/"):
-			continue
 		var target := dest_dir.path_join(path.trim_prefix(root))
 		err = DirAccess.make_dir_recursive_absolute(target.get_base_dir())
 		if err == OK:

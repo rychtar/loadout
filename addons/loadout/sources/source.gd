@@ -76,7 +76,17 @@ func get_plugin_name() -> String:
 ## Returns { "ok": bool, "error": String, "path": String, "package_folder": String (optional, the
 ## plugin's folder name inside the package), "warning": String (optional) } where path holds plugin.cfg.
 func fetch(_version: String, _dest_dir: String) -> Dictionary:
-	return { "ok": false, "error": "The source cannot download.", "path": "" }
+	return fetch_error("The source cannot download.")
+
+
+## A failed fetch() answer.
+static func fetch_error(error: String) -> Dictionary:
+	return { "ok": false, "error": error, "path": "" }
+
+
+## A failed search() answer.
+static func search_error(error: String) -> Dictionary:
+	return { "ok": false, "error": error, "results": [] }
 
 
 ## A failed list_releases() answer.
@@ -95,6 +105,17 @@ static func default_headers() -> PackedStringArray:
 	return PackedStringArray(["User-Agent: %s" % USER_AGENT])
 
 
+## Shared by the remote sources: downloads url. Returns the fetch_error() on failure, otherwise
+## { "ok": true, "error": "", "path": "", "body": PackedByteArray }.
+func _download(http: LoadoutHttp, url: String) -> Dictionary:
+	var response: Dictionary = await http.get_request(url, default_headers())
+	if not response["ok"]:
+		return fetch_error(response["error"])
+	if response["code"] != 200:
+		return fetch_error("Download of %s failed (code %d)." % [url.get_slice("?", 0), response["code"]])
+	return { "ok": true, "error": "", "path": "", "body": response["body"] }
+
+
 ## Shared by the remote sources: saves a downloaded zip, extracts the plugin folder into dest_dir and
 ## returns the fetch() result.
 func _save_and_extract(body: PackedByteArray, plugin_folder: String, dest_dir: String) -> Dictionary:
@@ -102,18 +123,18 @@ func _save_and_extract(body: PackedByteArray, plugin_folder: String, dest_dir: S
 	DirAccess.make_dir_recursive_absolute(zip_path.get_base_dir())
 	var file := FileAccess.open(zip_path, FileAccess.WRITE)
 	if file == null:
-		return { "ok": false, "error": "Cannot save the zip: %s" % error_string(FileAccess.get_open_error()), "path": "" }
+		return fetch_error("Cannot save the zip: %s" % error_string(FileAccess.get_open_error()))
 	file.store_buffer(body)
 	var write_error := file.get_error()
 	file.close()
 	if write_error != OK:
 		DirAccess.remove_absolute(zip_path)
-		return { "ok": false, "error": "Cannot save the zip: %s" % error_string(write_error), "path": "" }
+		return fetch_error("Cannot save the zip: %s" % error_string(write_error))
 	var extracted := Zip.extract_plugin(zip_path, plugin_folder, dest_dir)
 	DirAccess.remove_absolute(zip_path)
 	if not extracted["ok"]:
 		Fs.remove_dir(dest_dir)
-		return { "ok": false, "error": extracted["error"], "path": "" }
+		return fetch_error(extracted["error"])
 	return { "ok": true, "error": "", "path": dest_dir, "package_folder": extracted["source_folder"],
 			"warning": folder_warning(extracted["source_folder"], plugin_folder) }
 

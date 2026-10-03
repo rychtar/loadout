@@ -66,27 +66,23 @@ func list_releases(_etag: String = "") -> Dictionary:
 func fetch(version: String, dest_dir: String) -> Dictionary:
 	var release := get_release(version)
 	if release.is_empty():
-		return { "ok": false, "error": "Release %s of %s is unknown, check for updates." % [version, asset], "path": "" }
+		return fetch_error("Release %s of %s is unknown, check for updates." % [version, asset])
 	# Signed links expire, ask for a fresh one.
 	var answer := await _fetch_release_data()
 	if not answer["ok"]:
-		return { "ok": false, "error": answer["error"], "path": "" }
+		return fetch_error(answer["error"])
 	var current: Dictionary = {}
 	for item: Dictionary in answer["data"]:
 		if int(item.get("id", -1)) == int(release.get("release_id", -2)):
 			current = item
 			break
 	if current.is_empty():
-		return { "ok": false, "error": "The Asset Store no longer offers %s %s." % [asset, version], "path": "" }
+		return fetch_error("The Asset Store no longer offers %s %s." % [asset, version])
 	var url := "" if current.get("download_url") == null else str(current["download_url"])
 	if url == "":
-		return { "ok": false, "error": "%s %s has no public download (paid assets are not supported)." % [asset, version], "path": "" }
-	var response: Dictionary = await _http.get_request(url, default_headers())
-	if not response["ok"]:
-		return { "ok": false, "error": response["error"], "path": "" }
-	if response["code"] != 200:
-		return { "ok": false, "error": "Download of %s %s failed (code %d)." % [asset, version, response["code"]], "path": "" }
-	return _save_and_extract(response["body"], folder, dest_dir)
+		return fetch_error("%s %s has no public download (paid assets are not supported)." % [asset, version])
+	var response: Dictionary = await _download(_http, url)
+	return _save_and_extract(response["body"], folder, dest_dir) if response["ok"] else response
 
 
 ## Searches free add-ons for the given Godot version ("4.7"). Returns { "ok", "error",
@@ -94,19 +90,19 @@ func fetch(version: String, dest_dir: String) -> Dictionary:
 static func search(http: LoadoutHttp, query: String, godot_version: String) -> Dictionary:
 	var text := query.strip_edges()
 	if text == "":
-		return { "ok": false, "error": "Enter what to search for.", "results": [] }
+		return search_error("Enter what to search for.")
 	var url := "%s/search/query/?type=0&query=%s" % [API, text.uri_encode()]
 	if godot_version != "":
 		url += "&compatibility=%s" % godot_version
 	url += "&batch_size=%d" % SEARCH_RESULTS
 	var response: Dictionary = await http.get_json(url, default_headers())
 	if not response["ok"]:
-		return { "ok": false, "error": response["error"], "results": [] }
+		return search_error(response["error"])
 	if response["code"] != 200:
-		return { "ok": false, "error": "The Asset Store answered with code %d." % response["code"], "results": [] }
+		return search_error("The Asset Store answered with code %d." % response["code"])
 	var data: Variant = response["data"]
 	if typeof(data) != TYPE_DICTIONARY or typeof(data.get("hits")) != TYPE_ARRAY:
-		return { "ok": false, "error": "Unexpected Asset Store answer.", "results": [] }
+		return search_error("Unexpected Asset Store answer.")
 	var results: Array[Dictionary] = []
 	for hit: Variant in data["hits"]:
 		if typeof(hit) != TYPE_DICTIONARY or typeof(hit.get("asset")) != TYPE_DICTIONARY:
