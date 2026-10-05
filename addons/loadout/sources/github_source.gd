@@ -10,6 +10,9 @@ extends LoadoutSource
 
 const API := "https://api.github.com"
 const PER_PAGE := 50
+## Pages of releases read at most (a full page means there may be older releases, e.g. an older
+## major version a range like ^1 needs).
+const MAX_PAGES := 4
 ## The version is the end of the tag, after the start or a separator (so "godot4-1.2.3" is 1.2.3, not 4.0.0-1.2.3).
 const _TAG_VERSION_PATTERN := "(?:^|[-_/\\s])[vV]?(\\d+(?:\\.\\d+){0,2}(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?)$"
 
@@ -62,12 +65,36 @@ func list_releases(etag: String = "") -> Dictionary:
 	if typeof(data) != TYPE_ARRAY:
 		return listing_error("Unexpected GitHub answer for %s." % repo)
 	var list: Array[Dictionary] = []
+	_append_releases(list, data)
+	var next_url := _next_page_url(response_headers)
+	var pages := 1
+	while next_url != "" and pages < MAX_PAGES and (data as Array).size() >= PER_PAGE:
+		var page: Dictionary = await _http.get_json(next_url, _api_headers())
+		if not page["ok"] or page["code"] != 200 or typeof(page["data"]) != TYPE_ARRAY:
+			break
+		data = page["data"]
+		_append_releases(list, data)
+		next_url = _next_page_url(page["headers"])
+		pages += 1
+	return { "ok": true, "error": "", "not_modified": false, "etag": str(response_headers.get("etag", "")), "releases": list }
+
+
+func _append_releases(list: Array[Dictionary], data: Array) -> void:
 	for item: Variant in data:
 		if typeof(item) == TYPE_DICTIONARY:
 			var release := _parse_release(item)
 			if not release.is_empty():
 				list.append(release)
-	return { "ok": true, "error": "", "not_modified": false, "etag": str(response_headers.get("etag", "")), "releases": list }
+
+
+## The rel="next" address of a Link header, "" when there is none or it leaves the API host (the
+## token must not go anywhere else).
+func _next_page_url(headers: Dictionary) -> String:
+	for part in str(headers.get("link", "")).split(","):
+		if part.contains('rel="next"'):
+			var url := part.get_slice(">", 0).get_slice("<", 1).strip_edges()
+			return url if url.begins_with(API + "/") else ""
+	return ""
 
 
 func fetch(version: String, dest_dir: String) -> Dictionary:

@@ -474,3 +474,33 @@ func test_lock_keeps_fields_it_does_not_know() -> void:
 	check(saved.has("future"), "top-level field kept")
 	check_eq(saved["plugins"]["gut"].get("channel"), "beta", "entry field kept")
 	check_eq(saved["plugins"]["gut"].get("pinned"), true, "known fields still change")
+
+
+func test_github_follows_the_next_page_of_releases() -> void:
+	var http := FakeHttp.new()
+	var source := GithubSource.new("owner/mono", "mono", http, func() -> String: return "secret")
+	var page2 := "https://api.github.com/repositories/1/releases?per_page=50&page=2"
+	var first: Array = []
+	for i in 50:
+		first.append(_gh_release("v2.0.%d" % i))
+	http.respond_json(RELEASES_URL, first, { "link": "<%s>; rel=\"next\", <https://api.github.com/repositories/1/releases?per_page=50&page=3>; rel=\"last\"" % page2, "etag": "E1" })
+	http.respond_json(page2, [_gh_release("v1.9.0"), _gh_release("v1.8.0")])
+	var listed := await source.list_releases()
+	check(listed["ok"], "ok: %s" % listed["error"])
+	check_eq(listed["releases"].size(), 52, "releases of both pages")
+	check_eq(listed["etag"], "E1", "the ETag of the first page is the one that is kept")
+	source.releases.assign(listed["releases"])
+	check_eq((await source.get_latest_version("^1.0.0"))["version"], "1.9.0", "an older major version beyond the first page is found")
+	check_eq(http.header_of(1, "authorization"), "Bearer secret", "the token goes along to the same API host")
+
+
+func test_github_ignores_a_next_page_on_another_host() -> void:
+	var http := FakeHttp.new()
+	var source := GithubSource.new("owner/mono", "mono", http, func() -> String: return "secret")
+	var first: Array = []
+	for i in 50:
+		first.append(_gh_release("v2.0.%d" % i))
+	http.respond_json(RELEASES_URL, first, { "link": "<https://evil.example/releases?page=2>; rel=\"next\"" })
+	var listed := await source.list_releases()
+	check(listed["ok"], "first page is enough")
+	check_eq(http.requests.size(), 1, "the token is not sent to another host")
