@@ -7,13 +7,14 @@ extends RefCounted
 const DEFAULT_EXCLUDE: PackedStringArray = [".git", ".DS_Store"]
 ## Files the editor generates or the OS adds; they do not count as changes of a plugin.
 const HASH_IGNORED_EXTENSIONS: PackedStringArray = ["uid", "import"]
-const HASH_IGNORED_NAMES: PackedStringArray = [".DS_Store"]
+const HASH_IGNORED_NAMES: PackedStringArray = [".ds_store", "thumbs.db", "desktop.ini"]
 ## Files with a NUL byte in this prefix are binary (same heuristic as git).
 const BINARY_SNIFF_BYTES := 8000
 
 
 ## Recursively copies the contents of src into dst (dst is created if missing).
-## Files and folders whose name is in exclude are skipped at any depth.
+## Files and folders whose name is in exclude are skipped at any depth. Symlinked sub folders are
+## skipped (they could point outside the plugin or loop); src itself may be a symlink.
 static func copy_dir(src: String, dst: String, exclude: PackedStringArray = []) -> Error:
 	var dir := _open(src)
 	if dir == null:
@@ -28,7 +29,7 @@ static func copy_dir(src: String, dst: String, exclude: PackedStringArray = []) 
 		if err != OK:
 			return err
 	for sub_dir: String in dir.get_directories():
-		if exclude.has(sub_dir):
+		if exclude.has(sub_dir) or dir.is_link(sub_dir):
 			continue
 		err = copy_dir(src.path_join(sub_dir), dst.path_join(sub_dir), exclude)
 		if err != OK:
@@ -36,10 +37,13 @@ static func copy_dir(src: String, dst: String, exclude: PackedStringArray = []) 
 	return OK
 
 
-## Recursively deletes path. A missing path is not an error.
+## Recursively deletes path. A missing path is not an error. A symlink is only unlinked, what it
+## points to stays.
 static func remove_dir(path: String) -> Error:
 	if not DirAccess.dir_exists_absolute(path):
 		return OK
+	if is_link(path):
+		return DirAccess.remove_absolute(path)
 	var dir := _open(path)
 	if dir == null:
 		return DirAccess.get_open_error()
@@ -53,6 +57,17 @@ static func remove_dir(path: String) -> Error:
 		if err != OK:
 			return err
 	return DirAccess.remove_absolute(path)
+
+
+## Whether path is a symbolic link.
+static func is_link(path: String) -> bool:
+	var parent := DirAccess.open(path.trim_suffix("/").get_base_dir())
+	return parent != null and parent.is_link(path.trim_suffix("/").get_file())
+
+
+## Whether path is a folder with at least one file in it (an empty leftover folder is not).
+static func has_files(path: String) -> bool:
+	return DirAccess.dir_exists_absolute(path) and not list_files(path).is_empty()
 
 
 ## All files under root (hidden included) as sorted paths relative to root.
@@ -73,7 +88,7 @@ static func hash_dir(path: String) -> String:
 	context.start(HashingContext.HASH_SHA256)
 	for relative in list_files(path):
 		var file_name := relative.get_file()
-		if HASH_IGNORED_NAMES.has(file_name) or HASH_IGNORED_EXTENSIONS.has(file_name.get_extension()):
+		if HASH_IGNORED_NAMES.has(file_name.to_lower()) or HASH_IGNORED_EXTENSIONS.has(file_name.get_extension()):
 			continue
 		var content := _normalized_bytes(path.path_join(relative))
 		var content_hash := HashingContext.new()
@@ -100,6 +115,8 @@ static func _collect_files(root: String, relative: String, files: PackedStringAr
 	for file_name: String in dir.get_files():
 		files.append(relative.path_join(file_name) if relative != "" else file_name)
 	for sub_dir: String in dir.get_directories():
+		if dir.is_link(sub_dir):
+			continue
 		_collect_files(root, relative.path_join(sub_dir) if relative != "" else sub_dir, files)
 
 
