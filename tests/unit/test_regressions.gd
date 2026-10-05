@@ -431,3 +431,18 @@ func test_downloads_get_a_longer_timeout_than_listings() -> void:
 	check_eq(http.requests.size(), 2, "a listing and a download")
 	check_eq(http.requests[0]["timeout"], LoadoutHttp.TIMEOUT_S, "listing timeout")
 	check(http.requests[1]["timeout"] > http.requests[0]["timeout"], "a package download may take longer than a release listing")
+
+
+func test_sources_survive_values_of_the_wrong_type() -> void:
+	var http := FakeHttp.new()
+	http.respond_json("https://store.godotengine.org/api/v1/releases/pub/slug/", [
+		{ "id": [], "version": "1.0.0", "stable": {} }, { "id": "7", "version": "1.1.0", "stable": "yes" }])
+	http.respond_json(RELEASES_URL, [_gh_release("v1.0.0", { "prerelease": [] })])
+	http.respond_json("https://store.godotengine.org/api/v1/search/query/?type=0&query=x&batch_size=20",
+			{ "hits": [{ "asset": { "price_cent": {}, "slug": "s", "name": "N", "publisher": { "slug": "p", "name": "P" } } }] })
+	var store := StoreSource.new("pub/slug", "slug", http)
+	var listed := await store.list_releases()
+	check(listed["ok"] and listed["releases"].size() == 2, "store releases parsed despite odd types")
+	var github := GithubSource.new("owner/mono", "mono", http)
+	check((await github.list_releases())["ok"], "github release with an odd prerelease flag")
+	check((await StoreSource.search(http, "x", ""))["ok"], "store search with an odd price")

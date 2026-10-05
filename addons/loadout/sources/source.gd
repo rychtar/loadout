@@ -105,6 +105,15 @@ static func listing_error(error: String) -> Dictionary:
 	return { "ok": false, "error": error, "not_modified": false, "etag": "", "releases": [] }
 
 
+## JSON values of the wrong type must not crash the parsers (bool([]) and int({}) are errors).
+static func json_bool(value: Variant, fallback: bool) -> bool:
+	return value if typeof(value) == TYPE_BOOL else fallback
+
+
+static func json_int(value: Variant, fallback: int) -> int:
+	return int(value) if typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT else fallback
+
+
 ## Release notes from a JSON value (null becomes ""), cut to limit characters.
 static func trim_notes(value: Variant, limit: int = MAX_NOTES) -> String:
 	var notes := "" if value == null else str(value)

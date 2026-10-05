@@ -54,11 +54,11 @@ func list_releases(_etag: String = "") -> Dictionary:
 		list.append({
 			"version": str(version),
 			"tag": tag,
-			"prerelease": not bool(item.get("stable", true)) or version.is_prerelease(),
+			"prerelease": not json_bool(item.get("stable"), true) or version.is_prerelease(),
 			"notes": notes,
 			"url": ASSET_PAGE % asset,
 			"download_url": "",
-			"release_id": int(item.get("id", 0)),
+			"release_id": json_int(item.get("id"), 0),
 		})
 	return { "ok": true, "error": "", "not_modified": false, "etag": "", "releases": list }
 
@@ -73,7 +73,7 @@ func fetch(version: String, dest_dir: String) -> Dictionary:
 		return fetch_error(answer["error"])
 	var current: Dictionary = {}
 	for item: Dictionary in answer["data"]:
-		if int(item.get("id", -1)) == int(release.get("release_id", -2)):
+		if json_int(item.get("id"), -1) == json_int(release.get("release_id"), -2):
 			current = item
 			break
 	if current.is_empty():
@@ -108,7 +108,7 @@ static func search(http: LoadoutHttp, query: String, godot_version: String) -> D
 		if typeof(hit) != TYPE_DICTIONARY or typeof(hit.get("asset")) != TYPE_DICTIONARY:
 			continue
 		var item: Dictionary = hit["asset"]
-		if int(item.get("price_cent", 0)) > 0:
+		if json_int(item.get("price_cent"), 0) > 0:
 			continue
 		var publisher: Dictionary = item.get("publisher", {}) if typeof(item.get("publisher")) == TYPE_DICTIONARY else {}
 		results.append({

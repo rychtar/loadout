@@ -94,7 +94,7 @@ func _parse_release(item: Dictionary) -> Dictionary:
 	return {
 		"version": str(version),
 		"tag": tag,
-		"prerelease": bool(item.get("prerelease", false)) or version.is_prerelease(),
+		"prerelease": json_bool(item.get("prerelease"), false) or version.is_prerelease(),
 		"notes": trim_notes(item.get("body")),
 		"url": str(item.get("html_url", "")),
 		"download_url": _package_url(item),
