@@ -350,3 +350,42 @@ func test_self_update_validates_the_new_scripts_before_swapping() -> void:
 	var result: Dictionary = await installer.self_update(env["entry"], source, "1.2.0")
 	check(not result["ok"], "self_update refuses a staged copy whose scripts do not compile (otherwise Loadout is broken after the restart and cannot repair itself)")
 	check_eq(installer.installed_version(env["entry"]), "1.0.0", "the running files are untouched")
+
+
+func test_project_setup_crlf_and_no_trailing_newline() -> void:
+	var setup := load("res://tools/loadout_project_setup.gd")
+	var text := "config_version=5\r\n\r\n[editor_plugins]\r\n\r\nenabled=PackedStringArray(\"res://addons/a/plugin.cfg\")"
+	var out: Dictionary = setup.with_plugin_enabled(text, "res://addons/loadout/plugin.cfg")
+	check(out["ok"], "ok")
+	check(out["text"].contains("res://addons/a/plugin.cfg") and out["text"].contains("res://addons/loadout/plugin.cfg"), "both plugins listed: %s" % out["text"])
+	var cfg := ConfigFile.new()
+	check_eq(cfg.parse(out["text"]), OK, "result still parses as a Godot config")
+
+
+func test_project_setup_section_with_other_keys_only() -> void:
+	var setup := load("res://tools/loadout_project_setup.gd")
+	var text := "config_version=5\n\n[editor_plugins]\n\nfoo=1\n\n[rendering]\n\nx=1\n"
+	var out: Dictionary = setup.with_plugin_enabled(text, "res://addons/loadout/plugin.cfg")
+	var cfg := ConfigFile.new()
+	check_eq(cfg.parse(out["text"]), OK, "parses")
+	check(cfg.get_value("editor_plugins", "enabled", PackedStringArray()).has("res://addons/loadout/plugin.cfg"), "enabled added in the right section")
+	check_eq(cfg.get_value("editor_plugins", "foo"), 1, "other key kept")
+	check_eq(cfg.get_value("rendering", "x"), 1, "other section kept")
+
+
+func test_manager_does_not_announce_addon_installed_while_busy() -> void:
+	var m_script := load("res://addons/loadout/core/manager.gd")
+	var root := temp_dir("probe_busy_addon")
+	var addons := root.path_join("addons")
+	DirAccess.make_dir_recursive_absolute(addons)
+	var installer := Installer.new(FakeEditor.new(addons), addons, root.path_join("b"), root.path_join("s"))
+	Registry.new().save_file(root.path_join("reg.json"))
+	var manager = m_script.new(installer, root.path_join("reg.json"), root.path_join("lock.json"))
+	await manager.refresh()
+	manager.busy = true
+	DirAccess.make_dir_recursive_absolute(addons.path_join("hand_installed"))
+	write_text(addons.path_join("hand_installed/plugin.cfg"), "[plugin]\nname=\"H\"\nscript=\"p.gd\"\nversion=\"1.0.0\"\n")
+	check_eq(manager.detect_new_addons().size(), 0, "not announced while busy")
+	manager.busy = false
+	var later: Array = manager.detect_new_addons()
+	check_eq(later.size(), 1, "announced once the action is over (the plugin was added by the user, not by Loadout)")
