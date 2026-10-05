@@ -33,20 +33,28 @@ class Entry:
 	var source: Dictionary
 	var version_range: String = "*"
 	var auto_install: bool = true
+	## Fields this version does not know (written by a newer Loadout), kept when saving.
+	var extra: Dictionary = {}
 
 	func to_dict() -> Dictionary:
-		return {
+		var data := extra.duplicate(true)
+		data.merge({
 			"id": id,
 			"folder": folder,
 			"source": source.duplicate(),
 			"range": version_range,
 			"auto_install": auto_install,
-		}
+		}, true)
+		return data
 
+
+const ENTRY_KEYS: PackedStringArray = ["id", "folder", "source", "range", "auto_install"]
 
 static var _regex_cache: Dictionary[String, RegEx] = {}
 
 var entries: Array[Entry] = []
+## Top-level fields this version does not know, kept when saving.
+var extra: Dictionary = {}
 ## Problems found while parsing, for the dock.
 var warnings: PackedStringArray = []
 
@@ -61,6 +69,9 @@ static func from_dict(data: Variant) -> Dictionary:
 	if typeof(plugins) != TYPE_ARRAY:
 		return { "ok": false, "error": "\"plugins\" in the registry must be a list.", "registry": null }
 	var registry := LoadoutRegistry.new()
+	for key: Variant in data:
+		if key != "schema" and key != "plugins":
+			registry.extra[key] = data[key]
 	for item: Variant in plugins:
 		var error := registry.add_entry(item)
 		if error != "":
@@ -102,6 +113,9 @@ static func parse_entry(data: Variant) -> Dictionary:
 	if source["error"] != "":
 		return _entry_error(id, source["error"])
 	entry.source = source["source"]
+	for key: Variant in data:
+		if not ENTRY_KEYS.has(key):
+			entry.extra[key] = data[key]
 	return { "ok": true, "error": "", "entry": entry }
 
 
@@ -114,7 +128,9 @@ func to_dict() -> Dictionary:
 	var plugins: Array[Dictionary] = []
 	for entry in entries:
 		plugins.append(entry.to_dict())
-	return { "schema": SCHEMA, "plugins": plugins }
+	var data := extra.duplicate(true)
+	data.merge({ "schema": SCHEMA, "plugins": plugins }, true)
+	return data
 
 
 func get_entry(id: String) -> Entry:
@@ -201,6 +217,16 @@ func remove_entry(id: String) -> bool:
 
 ## Returns { "error": String, "source": Dictionary } (source only when error is "").
 static func _parse_source(data: Variant) -> Dictionary:
+	var parsed := _parse_known_source(data)
+	if parsed["error"] == "":
+		# Fields of a newer Loadout stay in the source.
+		for key: Variant in (data as Dictionary):
+			if not parsed["source"].has(key) and key != "path" and key != "repo" and key != "asset" and key != "asset_id":
+				parsed["source"][key] = data[key]
+	return parsed
+
+
+static func _parse_known_source(data: Variant) -> Dictionary:
 	if typeof(data) != TYPE_DICTIONARY:
 		return { "error": "source missing" }
 	match data.get("type"):

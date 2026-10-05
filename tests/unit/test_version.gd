@@ -121,4 +121,3 @@ func test_compare_orders_prereleases_below_the_release() -> void:
 	check_eq(_cmp("1.0.0", "1.0.0-rc.1"), 1, "release above prerelease")
 	check_eq(_cmp("1.0.0", "1.0.0"), 0, "equal")
 	check_eq(_cmp("1.2.0", "1.10.0"), -1, "numeric minor")
-

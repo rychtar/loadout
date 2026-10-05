@@ -14,6 +14,8 @@ var root: String
 var addons: String
 var editor: FakeEditor
 var fake_sources: Dictionary[String, LoadoutSource] = {}
+## Editor of the last manager made by _manager().
+var last_editor: FakeEditor
 
 
 func _setup(name: String, plugins: Array) -> void:
@@ -29,7 +31,8 @@ func _setup(name: String, plugins: Array) -> void:
 func _manager(project: String) -> Manager:
 	var project_addons := root.path_join(project).path_join("addons")
 	DirAccess.make_dir_recursive_absolute(project_addons)
-	var installer := Installer.new(FakeEditor.new(project_addons), project_addons, root.path_join(project + "_backup"), root.path_join(project + "_staging"))
+	last_editor = FakeEditor.new(project_addons)
+	var installer := Installer.new(last_editor, project_addons, root.path_join(project + "_backup"), root.path_join(project + "_staging"))
 	var overrides := fake_sources
 	var factory := func(entry: LoadoutRegistry.Entry) -> LoadoutSource:
 		return overrides[entry.id] if overrides.has(entry.id) else LoadoutSource.create(entry)
@@ -108,3 +111,13 @@ func test_manager_reports_when_the_first_refresh_is_done() -> void:
 	check(not manager.loaded, "not loaded before the first refresh (the dock must not say 'registry is empty')")
 	await manager.refresh()
 	check(manager.loaded, "loaded after it")
+
+
+
+func _fake_source(versions: Dictionary) -> FakeSource:
+	var typed: Dictionary[String, String] = {}
+	for version: String in versions:
+		typed[version] = FIXTURES.path_join(versions[version])
+	var source := FakeSource.new(typed)
+	fake_sources["fake_a"] = source
+	return source
