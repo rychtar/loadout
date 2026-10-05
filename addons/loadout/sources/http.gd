@@ -5,7 +5,9 @@ extends RefCounted
 ## The only place that talks to the network. Every request is an HTTPRequest node added under
 ## the plugin node (no own threads). Only https:// URLs are allowed.
 
+## Timeout of a whole request. Listing releases answers fast; a package download may take longer.
 const TIMEOUT_S := 60.0
+const DOWNLOAD_TIMEOUT_S := 600.0
 const MAX_BODY_BYTES := 256 * 1024 * 1024
 const MAX_REDIRECTS := 8
 const REDIRECT_CODES: Array[int] = [301, 302, 303, 307, 308]
@@ -22,11 +24,11 @@ func _init(parent: Node) -> void:
 ## Returns { "ok": bool, "error": String, "code": int,
 ## "headers": Dictionary (lower-case names), "body": PackedByteArray }.
 ## ok is false only when no HTTP answer arrived; check "code" for HTTP errors.
-func get_request(url: String, headers: PackedStringArray = []) -> Dictionary:
+func get_request(url: String, headers: PackedStringArray = [], timeout_s: float = TIMEOUT_S) -> Dictionary:
 	var current := url
 	var current_headers := headers
 	for hop in MAX_REDIRECTS + 1:
-		var response: Dictionary = await _request_once(current, current_headers)
+		var response: Dictionary = await _request_once(current, current_headers, timeout_s)
 		if not response["ok"] or not REDIRECT_CODES.has(response["code"]):
 			return response
 		var target := redirect_target(current, str(response["headers"].get("location", "")))
@@ -70,14 +72,14 @@ static func without_credentials(headers: PackedStringArray) -> PackedStringArray
 	return kept
 
 
-func _request_once(url: String, headers: PackedStringArray) -> Dictionary:
+func _request_once(url: String, headers: PackedStringArray, timeout_s: float) -> Dictionary:
 	var refused := check_url(url)
 	if refused != "":
 		return _error(refused)
 	if _parent == null or not _parent.is_inside_tree():
 		return _error("The HTTP client is not attached to the editor.")
 	var request := HTTPRequest.new()
-	request.timeout = TIMEOUT_S
+	request.timeout = timeout_s
 	request.body_size_limit = MAX_BODY_BYTES
 	request.max_redirects = 0
 	_parent.add_child(request)

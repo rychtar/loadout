@@ -119,7 +119,7 @@ static func default_headers() -> PackedStringArray:
 ## Shared by the remote sources: downloads url. Returns the fetch_error() on failure, otherwise
 ## { "ok": true, "error": "", "path": "", "body": PackedByteArray }.
 func _download(http: LoadoutHttp, url: String) -> Dictionary:
-	var response: Dictionary = await http.get_request(url, default_headers())
+	var response: Dictionary = await http.get_request(url, default_headers(), LoadoutHttp.DOWNLOAD_TIMEOUT_S)
 	if not response["ok"]:
 		return fetch_error(response["error"])
 	if response["code"] != 200:

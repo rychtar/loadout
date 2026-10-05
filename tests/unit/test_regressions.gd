@@ -418,3 +418,16 @@ func test_zip_prefers_the_shallowest_copy_of_the_plugin() -> void:
 	var result := Zip_.extract_plugin(zip, "foo", root.path_join("out"))
 	check(result["ok"], "extracts: %s" % result["error"])
 	check_eq(FileAccess.get_file_as_string(root.path_join("out/plugin.cfg")), "real", "the plugin at addons/foo, not the demo's copy")
+
+
+func test_downloads_get_a_longer_timeout_than_listings() -> void:
+	var http := FakeHttp.new()
+	var source := GithubSource.new("owner/mono", "mono", http)
+	http.respond_json(RELEASES_URL, [_gh_release("v1.0.0")])
+	http.responses["https://api.github.com/repos/owner/mono/zipball/v1.0.0"] = { "code": 200, "body": "not a zip" }
+	var listed := await source.list_releases()
+	source.releases.assign(listed["releases"])
+	await source.fetch("1.0.0", temp_dir("probe_timeout").path_join("d"))
+	check_eq(http.requests.size(), 2, "a listing and a download")
+	check_eq(http.requests[0]["timeout"], LoadoutHttp.TIMEOUT_S, "listing timeout")
+	check(http.requests[1]["timeout"] > http.requests[0]["timeout"], "a package download may take longer than a release listing")
