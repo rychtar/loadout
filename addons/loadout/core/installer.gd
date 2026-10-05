@@ -43,6 +43,11 @@ func target_dir(entry: LoadoutRegistry.Entry) -> String:
 	return addons_dir.path_join(entry.folder)
 
 
+## Whether the plugin folder holds files. A leftover empty folder counts as not installed.
+func is_installed(entry: LoadoutRegistry.Entry) -> bool:
+	return Fs.has_files(target_dir(entry))
+
+
 ## Version from the installed plugin.cfg, "" when the plugin is not installed.
 func installed_version(entry: LoadoutRegistry.Entry) -> String:
 	var cfg := ConfigFile.new()
@@ -53,7 +58,7 @@ func installed_version(entry: LoadoutRegistry.Entry) -> String:
 
 ## Why installing over the current folder needs the user's confirmation, "" when it does not.
 func check_overwrite(entry: LoadoutRegistry.Entry, lock_entry: LoadoutLockfile.Entry) -> String:
-	if not DirAccess.dir_exists_absolute(target_dir(entry)):
+	if not is_installed(entry):
 		return ""
 	if lock_entry == null:
 		return CONFIRM_UNMANAGED
@@ -84,7 +89,7 @@ func install(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: Strin
 		return _fail(result, fetched["error"])
 	var staged: String = fetched["path"]
 	result["package_folder"] = str(fetched.get("package_folder", ""))
-	if not DirAccess.dir_exists_absolute(target_dir(entry)) and result["package_folder"] != "" \
+	if not is_installed(entry) and result["package_folder"] != "" \
 			and result["package_folder"] != entry.folder:
 		# Plugins often use fixed res://addons/<folder>/ paths: ask before installing under another name.
 		Fs.remove_dir(staging)
@@ -96,7 +101,7 @@ func install(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: Strin
 		Log.write(result["warning"], Log.Level.WARNING)
 	_preserve_uids(target_dir(entry), staged)
 
-	if DirAccess.dir_exists_absolute(target_dir(entry)):
+	if is_installed(entry):
 		await _replace(entry, staged, result)
 	else:
 		await _install_fresh(entry, staged, enable, result)

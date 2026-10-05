@@ -280,7 +280,7 @@ func adopt(id: String) -> Error:
 	if state == null or state.entry == null:
 		return ERR_DOES_NOT_EXIST
 	var dir := installer.target_dir(state.entry)
-	if not DirAccess.dir_exists_absolute(dir):
+	if not installer.is_installed(state.entry):
 		return ERR_DOES_NOT_EXIST
 	lockfile.set_installed(id, _lockable_version(state.entry), Fs.hash_dir(dir), _today())
 	return await _save_and_update(id)
@@ -344,7 +344,7 @@ func add_registry_entry(data: Dictionary, take_over: bool = false) -> String:
 	if error != "":
 		return error
 	var entry := registry.get_entry(str(data.get("id", "")))
-	if take_over and _lock_ok and DirAccess.dir_exists_absolute(installer.target_dir(entry)) and lockfile.get_entry(entry.id) == null:
+	if take_over and _lock_ok and installer.is_installed(entry) and lockfile.get_entry(entry.id) == null:
 		lockfile.set_installed(entry.id, _lockable_version(entry), Fs.hash_dir(installer.target_dir(entry)), _today())
 		_save_lock()
 	await refresh()
@@ -447,7 +447,7 @@ func _compute_state(entry: LoadoutRegistry.Entry, check_updates: bool = false) -
 	if state.display_name == "":
 		state.display_name = entry.id
 
-	if DirAccess.dir_exists_absolute(installer.target_dir(entry)):
+	if installer.is_installed(entry):
 		_describe_installed(state, source_error)
 	else:
 		await _describe_missing(state, source, source_error)

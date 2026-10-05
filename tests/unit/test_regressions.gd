@@ -184,6 +184,18 @@ func test_force_reinstall_same_version_keeps_earlier_backup() -> void:
 	check(third["backup_path"] != backup_one, "backups of one version get different folders")
 
 
+func test_empty_leftover_folder_is_treated_as_missing() -> void:
+	var env := _install_env("empty_folder")
+	var installer: Installer = env["installer"]
+	var entry: Registry.Entry = env["entry"]
+	DirAccess.make_dir_recursive_absolute(env["addons"].path_join("fake_a"))
+	var reason := installer.check_overwrite(entry, null)
+	check_eq(reason, "", "an empty addons/fake_a (no files) needs no confirmation to install into")
+	var result: Dictionary = await installer.install(entry, env["source"], "1.0.0")
+	check(result["ok"] and result["from"] == "", "installs as a fresh install: %s" % result["error"])
+	check(FileAccess.file_exists(env["addons"].path_join("fake_a/plugin.cfg")), "files are in place")
+
+
 
 
 # --- round 2 --------------------------------------------------------------------------------
