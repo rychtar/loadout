@@ -93,6 +93,45 @@ func _checker(now: Callable, name: String) -> Checker:
 	return c
 
 
+func test_first_failure_is_retried_soon() -> void:
+	var clock := { "now": 1_800_000_000 }
+	var checker := _checker(func() -> int: return clock["now"], "firstfail")
+	var source := FakeSource.new({ "1.0.0": FIXTURES.path_join("1.0.0") })
+	source.remote = true
+	source.fail_list = "Connection failed"
+	await checker.load_releases(source)
+	clock["now"] += 300
+	var soon := await checker.load_releases(source)
+	check(not soon["ok"] and source.list_calls == 1, "an offline editor does not ask again within minutes")
+	clock["now"] += 700  # 16 minutes after the failure, network is back
+	source.fail_list = ""
+	var again := await checker.load_releases(source)
+	check(again["ok"], "after the retry interval a failed first check (nothing cached) asks the source again (err=%s)" % again["error"])
+
+
+func test_clock_in_the_past_does_not_freeze_updates() -> void:
+	var clock := { "now": 1_800_000_000 }
+	var checker := _checker(func() -> int: return clock["now"], "clock")
+	var source := FakeSource.new({ "1.0.0": FIXTURES.path_join("1.0.0") })
+	source.remote = true
+	await checker.load_releases(source)
+	clock["now"] -= 365 * DAY  # the clock was wrong when the cache was written
+	check(checker.is_due(source.cache_key()), "a checked_at a year in the future counts as due")
+
+
+func test_cache_with_wrong_types_does_not_crash() -> void:
+	var root := temp_dir("probe_cachetypes")
+	var path := root.path_join("loadout_cache.json")
+	write_text(path, JSON.stringify({ "schema": 1, "sources": { "fake:fake_a": { "checked_at": 1, "releases": "oops" } } }))
+	var checker := Checker.new(path)
+	checker.load_cache()
+	var source := FakeSource.new({ "1.0.0": FIXTURES.path_join("1.0.0") })
+	source.remote = true
+	var result: Dictionary = await checker.load_releases(source, true)
+	check(result.get("ok", false), "hand-damaged cache entry is ignored")
+	check_eq(source.list_calls, 1, "and the source is asked instead")
+
+
 # --- github source --------------------------------------------------------------------------
 
 const RELEASES_URL := "https://api.github.com/repos/owner/mono/releases?per_page=50"

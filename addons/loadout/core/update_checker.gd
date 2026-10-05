@@ -13,6 +13,8 @@ const JsonStore := preload("../util/json_store.gd")
 const SCHEMA := 1
 const FILE_NAME := "loadout_cache.json"
 const CHECK_INTERVAL_S := 24 * 60 * 60
+## A failed check with nothing cached (so no plugin can be installed) is retried after this long.
+const RETRY_INTERVAL_S := 15 * 60
 
 var path: String
 ## Problems with the cache file itself (shown in the dock, the cache is then rebuilt).
@@ -50,7 +52,10 @@ func load_cache() -> void:
 		return
 	var sources: Variant = read["data"].get("sources", {})
 	if typeof(sources) == TYPE_DICTIONARY:
-		_sources = sources
+		for key: Variant in sources:
+			var entry := _valid_entry(sources[key])
+			if not entry.is_empty():
+				_sources[str(key)] = entry
 
 
 func save_cache() -> Error:
@@ -62,10 +67,26 @@ func save_cache() -> Error:
 	return err
 
 
-## True when the source has not been asked within the last day.
+## True when the source has not been asked within the last day (a check time in the future,
+## from a clock that was wrong, counts as due).
 func is_due(key: String) -> bool:
 	var entry: Dictionary = _sources.get(key, {})
-	return _now.call() - int(entry.get("checked_at", 0)) >= CHECK_INTERVAL_S
+	var age: int = _now.call() - int(entry.get("checked_at", 0))
+	return age < 0 or age >= CHECK_INTERVAL_S
+
+
+## The cache entry when it has the expected shape, otherwise {} (a hand-edited file must not crash).
+static func _valid_entry(raw: Variant) -> Dictionary:
+	if typeof(raw) != TYPE_DICTIONARY:
+		return {}
+	var entry: Dictionary = raw
+	var releases: Variant = entry.get("releases", [])
+	if typeof(releases) != TYPE_ARRAY:
+		return {}
+	for release: Variant in releases:
+		if typeof(release) != TYPE_DICTIONARY:
+			return {}
+	return entry
 
 
 ## Fills source.releases from the cache or the source. Returns { "ok": bool, "error": String,
@@ -107,6 +128,9 @@ func load_releases(source: LoadoutSource, force: bool = false) -> Dictionary:
 	else:
 		entry["last_error"] = answer["error"]
 		result["error"] = answer["error"]
+		if cached.is_empty():
+			# Nothing to fall back on: try again soon instead of waiting a day.
+			entry["checked_at"] = _now.call() - CHECK_INTERVAL_S + RETRY_INTERVAL_S
 		# Stale data beats none: the releases from the last good answer, with a warning.
 		if not cached.is_empty():
 			result["from_cache"] = true
