@@ -89,3 +89,14 @@ func test_confirmation_result_carries_the_chosen_version_and_pin() -> void:
 	# The dock repeats the action after "Overwrite" with exactly what the user chose.
 	check_eq(refused.get("version"), "1.0.0", "result names the version the user chose")
 	check_eq(refused.get("pin"), true, "and the pin choice")
+
+
+func test_local_plugin_with_an_invalid_version_says_so() -> void:
+	_setup("bad_local_version", [])
+	var plugin := root.path_join("plugin_src")
+	DirAccess.make_dir_recursive_absolute(plugin)
+	write_text(plugin.path_join("plugin.cfg"), "[plugin]\nname=\"X\"\nscript=\"p.gd\"\nversion=\"1.2.3.4\"\n")
+	var source := LoadoutLocalSource.new(ProjectSettings.globalize_path(plugin))
+	var latest := await source.get_latest_version("*")
+	check(not latest["ok"], "not installable")
+	check(not latest["error"].contains("does not match range"), "the message blames the version, not the range: %s" % latest["error"])

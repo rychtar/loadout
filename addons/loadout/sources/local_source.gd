@@ -30,6 +30,8 @@ func get_latest_version(version_range: String) -> Dictionary:
 	var version := _current_version()
 	if version == "":
 		return { "ok": false, "error": _no_version_error(), "version": "" }
+	if LoadoutVersion.parse(version) == null:
+		return { "ok": false, "error": "Version \"%s\" in the plugin.cfg of %s is not valid, use major.minor.patch (e.g. 1.2.3)." % [version, path], "version": "" }
 	if not LoadoutVersion.satisfies(version, version_range):
 		return { "ok": false, "error": "Local version %s does not match range %s." % [version, version_range], "version": "" }
 	return { "ok": true, "error": "", "version": version }
