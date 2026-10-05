@@ -3,7 +3,9 @@ extends RefCounted
 
 ## Reads and writes Loadout JSON files (registry, lock, cache).
 ## - Every file has a "schema" field; an unknown or missing schema is never read or overwritten.
-## - A corrupt file is backed up to *.bak (never overwriting an older backup) and never overwritten.
+## - A corrupt file is backed up to *.bak (never overwriting an older backup, and not backed up
+##   again while an identical backup exists) and never overwritten.
+## - An empty file counts as missing: there is nothing in it to lose.
 ## - Writes go through a temporary file so a crash cannot leave a half-written file.
 
 const Log := preload("log.gd")
@@ -63,6 +65,8 @@ static func _inspect(path: String, schema: int) -> Dictionary:
 	var text := FileAccess.get_file_as_string(path)
 	if text.is_empty() and FileAccess.get_open_error() != OK:
 		return { "status": Status.CORRUPT, "error": "File %s cannot be read: %s." % [path, error_string(FileAccess.get_open_error())] }
+	if text.strip_edges().is_empty():
+		return { "status": Status.MISSING }
 	var json := JSON.new()
 	if json.parse(text) != OK:
 		return { "status": Status.CORRUPT, "error": "Damaged JSON in %s (line %d: %s)." % [path, json.get_error_line() + 1, json.get_error_message()] }
@@ -94,7 +98,10 @@ static func has_schema(data: Dictionary, schema: int) -> bool:
 static func _backup(path: String) -> String:
 	var backup := path + ".bak"
 	var index := 1
+	var content_hash := FileAccess.get_sha256(path)
 	while FileAccess.file_exists(backup):
+		if FileAccess.get_sha256(backup) == content_hash:
+			return backup
 		backup = "%s.%d.bak" % [path, index]
 		index += 1
 	if DirAccess.copy_absolute(path, backup) != OK:

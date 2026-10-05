@@ -141,7 +141,12 @@ func test_corrupt_file_is_backed_up_not_overwritten() -> void:
 	check(FileAccess.file_exists(path + ".bak"), "backup created")
 	check_eq(FileAccess.get_file_as_string(path + ".bak"), "{ \"schema\": 1, \"plugins\": [ ", "backup has original content")
 	Registry.load_file(path)
-	check(FileAccess.file_exists(path + ".1.bak"), "second backup does not overwrite the first")
+	check(not FileAccess.file_exists(path + ".1.bak"), "reading the same damaged file again does not add a backup")
+	write_text(path, "{ \"schema\": 1, ")
+	Registry.load_file(path)
+	check_eq(FileAccess.get_file_as_string(path + ".bak"), "{ \"schema\": 1, \"plugins\": [ ", "other damaged content does not overwrite the first backup")
+	check(FileAccess.file_exists(path + ".1.bak"), "it gets its own backup")
+	write_text(path, "{ \"schema\": 1, \"plugins\": [ ")
 	var empty: Registry = Registry.from_dict({ "schema": 1, "plugins": [] })["registry"]
 	check(empty.save_file(path) != OK, "save refuses to overwrite a corrupt file")
 	check_eq(FileAccess.get_file_as_string(path), "{ \"schema\": 1, \"plugins\": [ ", "original untouched")

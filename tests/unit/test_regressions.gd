@@ -61,6 +61,30 @@ func test_copy_dir_skips_symlinked_folders() -> void:
 	check_eq(Fs_.list_files(a), PackedStringArray(["f.txt"]), "nor listed")
 
 
+# --- json store: backup spam ----------------------------------------------------------------
+
+func test_corrupt_file_read_repeatedly_makes_one_backup() -> void:
+	var root := temp_dir("probe_bak")
+	var path := root.path_join("loadout.lock.json")
+	write_text(path, "{ not json")
+	for i in 5:
+		JsonStore.read(path, 1)
+	var backups := 0
+	for f in DirAccess.get_files_at(root):
+		if f.ends_with(".bak"):
+			backups += 1
+	check_eq(backups, 1, "number of .bak files after 5 reads of the same corrupt file")
+
+
+func test_empty_lock_file_is_not_a_permanent_block() -> void:
+	var root := temp_dir("probe_empty")
+	var path := root.path_join("loadout.lock.json")
+	write_text(path, "")
+	var lock := Lockfile.load_file(path)
+	# A 0-byte file (e.g. an interrupted write or `touch`) is arguably just "empty".
+	check(lock["ok"], "0-byte lock treated as empty, got error: %s" % lock["error"])
+
+
 # --- update checker -------------------------------------------------------------------------
 
 func _checker(now: Callable, name: String) -> Checker:
