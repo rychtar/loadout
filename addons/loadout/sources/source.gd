@@ -43,8 +43,8 @@ func list_releases(_etag: String = "") -> Dictionary:
 
 ## Whether a release may be offered as the newest version. A release the source flags as a
 ## pre-release is skipped unless its version number says so too (then the range decides).
-static func is_offered(release: Dictionary) -> bool:
-	if not release.get("prerelease", false):
+static func is_offered(release: Dictionary, include_prereleases: bool = false) -> bool:
+	if include_prereleases or not release.get("prerelease", false):
 		return true
 	var parsed := LoadoutVersion.parse(str(release.get("version", "")))
 	return parsed == null or parsed.is_prerelease()
@@ -53,12 +53,12 @@ static func is_offered(release: Dictionary) -> bool:
 ## Highest known version within version_range. A release the source flags as a pre-release is
 ## skipped unless its version number says so too (then the range decides, see LoadoutVersion).
 ## Returns { "ok": bool, "error": String, "version": String }.
-func get_latest_version(version_range: String) -> Dictionary:
+func get_latest_version(version_range: String, include_prereleases: bool = false) -> Dictionary:
 	var versions: PackedStringArray = []
 	for release in releases:
-		if is_offered(release):
+		if is_offered(release, include_prereleases):
 			versions.append(str(release.get("version", "")))
-	var best := LoadoutVersion.max_satisfying(versions, version_range)
+	var best := LoadoutVersion.max_satisfying(versions, version_range, include_prereleases)
 	if best == "":
 		var error := "The source has no version." if versions.is_empty() else "No version matches range %s." % version_range
 		return { "ok": false, "error": error, "version": "" }

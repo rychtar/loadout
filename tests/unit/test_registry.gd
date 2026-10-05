@@ -225,3 +225,12 @@ func test_merge_adds_only_new_ids() -> void:
 	check(summary["skipped"].has("a"), "existing id skipped")
 	check(summary["skipped"].has("d"), "folder clash skipped")
 	check_eq(registry.entries.size(), 3, "entries")
+
+
+func test_prereleases_flag() -> void:
+	var entry: Registry.Entry = Registry.parse_entry({ "id": "x", "source": { "type": "github", "repo": "a/b" }, "prereleases": true })["entry"]
+	check(entry.prereleases, "read")
+	check_eq(entry.to_dict().get("prereleases"), true, "written when on")
+	var plain: Registry.Entry = Registry.parse_entry({ "id": "x", "source": { "type": "github", "repo": "a/b" } })["entry"]
+	check(not plain.to_dict().has("prereleases"), "not written when off")
+	check(not Registry.parse_entry({ "id": "x", "source": { "type": "github", "repo": "a/b" }, "prereleases": "yes" })["ok"], "must be a boolean")

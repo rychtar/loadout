@@ -156,3 +156,16 @@ func test_download_failure_is_not_a_load_failure() -> void:
 	source.releases.append({ "version": "1.1.0", "tag": "v1.1.0", "prerelease": false, "notes": "", "url": "", "download_url": "" })
 	var result: Dictionary = await manager.install("fake_a")
 	check(not result["ok"] and not result["load_failed"], "a failed download says nothing about the Godot version")
+
+
+func test_prereleases_are_offered_only_when_asked() -> void:
+	_setup("prereleases", [_local("fake_a", "1.0.0")])
+	_fake_source({ "1.0.0": "1.0.0", "1.1.0-beta.1": "1.1.0" })
+	var manager := _manager("project")
+	await manager.refresh()
+	check_eq(manager.get_state("fake_a").latest_version, "1.0.0", "stable by default")
+	check_eq(await manager.update_registry_entry("fake_a", { "source": _local("fake_a", "1.0.0")["source"], "range": "*", "prereleases": true }), "", "opted in")
+	check_eq(manager.get_state("fake_a").latest_version, "1.1.0-beta.1", "the pre-release is now the newest")
+	check(Registry.load_file(_registry_path())["registry"].get_entry("fake_a").prereleases, "saved in the registry")
+	var listed := manager.available_versions("fake_a")
+	check(listed[0]["in_range"] and listed[0]["offered"], "listed as in range")

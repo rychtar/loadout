@@ -121,3 +121,16 @@ func test_compare_orders_prereleases_below_the_release() -> void:
 	check_eq(_cmp("1.0.0", "1.0.0-rc.1"), 1, "release above prerelease")
 	check_eq(_cmp("1.0.0", "1.0.0"), 0, "equal")
 	check_eq(_cmp("1.2.0", "1.10.0"), -1, "numeric minor")
+
+
+
+func test_include_prereleases() -> void:
+	check(not LoadoutVersion.satisfies("1.3.0-beta.1", "^1.2.0"), "off by default")
+	check(LoadoutVersion.satisfies("1.3.0-beta.1", "^1.2.0", true), "on: below the upper bound")
+	check(not LoadoutVersion.satisfies("2.0.0-beta.1", "^1.2.0", true), "2.0.0-beta.1 belongs to 2.0.0, outside ^1")
+	check(LoadoutVersion.satisfies("1.2.1-rc.1", "~1.2.0", true), "tilde")
+	check(not LoadoutVersion.satisfies("1.3.0-rc.1", "~1.2.0", true), "tilde upper bound")
+	check(not LoadoutVersion.satisfies("1.2.0-beta.1", "^1.2.0", true), "below the lower bound is still below")
+	check_eq(LoadoutVersion.max_satisfying(PackedStringArray(["1.2.0", "1.3.0-beta.1", "1.3.0-beta.2"]), "*", true), "1.3.0-beta.2", "newest pre-release wins")
+	check_eq(LoadoutVersion.max_satisfying(PackedStringArray(["1.2.0", "1.3.0", "1.3.0-beta.2"]), "*", true), "1.3.0", "the release beats its pre-releases")
+	check_eq(LoadoutVersion.max_satisfying(PackedStringArray(["1.2.0", "1.3.0-beta.2"]), "*"), "1.2.0", "off: stable only")

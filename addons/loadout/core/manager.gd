@@ -241,8 +241,8 @@ func available_versions(id: String) -> Array[Dictionary]:
 		list.append({
 			"version": version, "tag": str(release.get("tag", version)), "prerelease": bool(release.get("prerelease", false)),
 			"notes": str(release.get("notes", "")), "url": str(release.get("url", "")),
-			"in_range": number.matches(state.entry.version_range),
-			"offered": LoadoutSource.is_offered(release),
+			"in_range": number.matches(state.entry.version_range, state.entry.prereleases),
+			"offered": LoadoutSource.is_offered(release, state.entry.prereleases),
 		})
 	list.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return parsed[a["version"]].compare(parsed[b["version"]]) > 0)
 	return list
@@ -462,7 +462,7 @@ func _compute_state(entry: LoadoutRegistry.Entry, check_updates: bool = false) -
 		if not loaded["ok"]:
 			source_error = loaded["error"]
 		else:
-			var latest: Dictionary = await source.get_latest_version(entry.version_range)
+			var latest: Dictionary = await source.get_latest_version(entry.version_range, entry.prereleases)
 			if latest["ok"]:
 				state.latest_version = latest["version"]
 			else:

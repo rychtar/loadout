@@ -44,6 +44,7 @@ var _id_edit: LineEdit
 var _folder_edit: LineEdit
 var _range_edit: LineEdit
 var _auto_check: CheckBox
+var _prerelease_check: CheckBox
 var _file_dialog: EditorFileDialog
 
 
@@ -137,6 +138,9 @@ func _init() -> void:
 	_auto_check.text = "Install automatically in every project"
 	_auto_check.button_pressed = true
 	box.add_child(_auto_check)
+	_prerelease_check = CheckBox.new()
+	_prerelease_check.text = "Include pre-releases (betas, release candidates)"
+	box.add_child(_prerelease_check)
 
 	box.add_child(_wrapped(_caption("The registry applies to all projects on this computer."), width))
 
@@ -169,6 +173,7 @@ func open() -> void:
 	_folder_edit.text = ""
 	_range_edit.text = "*"
 	_auto_check.button_pressed = true
+	_prerelease_check.button_pressed = false
 	_on_source_changed()
 	reset_size()
 	popup_centered()
@@ -206,6 +211,7 @@ func open_edit(entry: LoadoutRegistry.Entry, display_name: String) -> void:
 	_folder_edit.editable = false
 	_range_edit.text = entry.version_range
 	_auto_check.button_pressed = entry.auto_install
+	_prerelease_check.button_pressed = entry.prereleases
 	_existing_label.text = "Registry id %s, installed in addons/%s. Id and folder stay the same." % [entry.id, entry.folder]
 	_existing_label.visible = true
 	var search_now := false
@@ -387,6 +393,7 @@ func _entry_data() -> Dictionary:
 		"source": _source_data(),
 		"range": _range_edit.text.strip_edges(),
 		"auto_install": _auto_check.button_pressed,
+		"prereleases": _prerelease_check.button_pressed,
 	}
 
 

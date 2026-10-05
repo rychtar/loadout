@@ -33,6 +33,8 @@ class Entry:
 	var source: Dictionary
 	var version_range: String = "*"
 	var auto_install: bool = true
+	## Offer pre-releases (1.3.0-beta.1, or releases the source flags as pre-releases) as updates.
+	var prereleases: bool = false
 	## Fields this version does not know (written by a newer Loadout), kept when saving.
 	var extra: Dictionary = {}
 
@@ -45,10 +47,12 @@ class Entry:
 			"range": version_range,
 			"auto_install": auto_install,
 		}, true)
+		if prereleases:
+			data["prereleases"] = true
 		return data
 
 
-const ENTRY_KEYS: PackedStringArray = ["id", "folder", "source", "range", "auto_install"]
+const ENTRY_KEYS: PackedStringArray = ["id", "folder", "source", "range", "auto_install", "prereleases"]
 
 static var _regex_cache: Dictionary[String, RegEx] = {}
 
@@ -109,6 +113,10 @@ static func parse_entry(data: Variant) -> Dictionary:
 	if typeof(auto_install) != TYPE_BOOL:
 		return _entry_error(id, "auto_install must be true or false")
 	entry.auto_install = auto_install
+	var prereleases: Variant = data.get("prereleases", false)
+	if typeof(prereleases) != TYPE_BOOL:
+		return _entry_error(id, "prereleases must be true or false")
+	entry.prereleases = prereleases
 	var source := _parse_source(data.get("source"))
 	if source["error"] != "":
 		return _entry_error(id, source["error"])
@@ -171,6 +179,7 @@ func update_entry(id: String, data: Dictionary) -> String:
 	entry.source = updated.source
 	entry.version_range = updated.version_range
 	entry.auto_install = updated.auto_install
+	entry.prereleases = updated.prereleases
 	return ""
 
 

@@ -5,7 +5,8 @@ extends RefCounted
 ## Semantic version (major.minor.patch[-prerelease][+build]) and version ranges.
 ## Accepted versions are lenient: optional leading "v", missing minor/patch default to 0.
 ## Ranges: "" or "*" (any), "1.2.3" (exact), "1.2" (1.2.x), "^1.2.3", "~1.2.3".
-## Prereleases only match a range whose own version is a prerelease of the same major.minor.patch.
+## Prereleases only match a range whose own version is a prerelease of the same major.minor.patch,
+## unless include_prereleases is set (then they match like any version below the range's upper bound).
 
 const _VERSION_PATTERN := "^[vV]?(0|[1-9]\\d*)(?:\\.(0|[1-9]\\d*))?(?:\\.(0|[1-9]\\d*))?" \
 		+ "(?:-([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
@@ -51,9 +52,9 @@ static func parse(text: String) -> LoadoutVersion:
 	return version
 
 
-static func satisfies(version_text: String, range_text: String) -> bool:
+static func satisfies(version_text: String, range_text: String, include_prereleases: bool = false) -> bool:
 	var version := parse(version_text)
-	return version != null and version.matches(range_text)
+	return version != null and version.matches(range_text, include_prereleases)
 
 
 static func is_valid_range(range_text: String) -> bool:
@@ -61,7 +62,7 @@ static func is_valid_range(range_text: String) -> bool:
 
 
 ## Highest version from versions that matches range_text, returned in its original form ("" if none).
-static func max_satisfying(versions: PackedStringArray, range_text: String) -> String:
+static func max_satisfying(versions: PackedStringArray, range_text: String, include_prereleases: bool = false) -> String:
 	var bounds := _bounds(range_text)
 	var best_text := ""
 	var best: LoadoutVersion = null
@@ -69,7 +70,7 @@ static func max_satisfying(versions: PackedStringArray, range_text: String) -> S
 		return best_text
 	for text in versions:
 		var version := parse(text)
-		if version == null or not version._within(bounds):
+		if version == null or not version._within(bounds, include_prereleases):
 			continue
 		if best == null or version.compare(best) > 0:
 			best = version
@@ -77,25 +78,34 @@ static func max_satisfying(versions: PackedStringArray, range_text: String) -> S
 	return best_text
 
 
-func matches(range_text: String) -> bool:
+func matches(range_text: String, include_prereleases: bool = false) -> bool:
 	var bounds := _bounds(range_text)
-	return bounds["ok"] and _within(bounds)
+	return bounds["ok"] and _within(bounds, include_prereleases)
 
 
 ## Whether this version lies within bounds from _bounds() (which must be ok).
-func _within(bounds: Dictionary) -> bool:
+func _within(bounds: Dictionary, include_prereleases: bool = false) -> bool:
 	var low: LoadoutVersion = bounds["min"]
 	var high: LoadoutVersion = bounds["max"]
-	if is_prerelease():
+	if is_prerelease() and not include_prereleases:
 		if low == null or not low.is_prerelease() or not _same_numbers(low):
 			return false
 	if low != null and compare(low) < 0:
 		return false
 	if high != null and bounds["exact"]:
 		return compare(high) == 0
-	if high != null and compare(high) >= 0:
+	# 2.0.0-beta is below ^1.0.0's bound 2.0.0 but belongs to 2.0.0, so the bound compares the numbers only.
+	if high != null and (compare(high) >= 0 or (include_prereleases and is_prerelease() and _core_compare(high) >= 0)):
 		return false
 	return true
+
+
+func _core_compare(other: LoadoutVersion) -> int:
+	if major != other.major:
+		return signi(major - other.major)
+	if minor != other.minor:
+		return signi(minor - other.minor)
+	return signi(patch - other.patch)
 
 
 ## -1, 0 or 1. Build metadata is ignored, prerelease precedence follows semver.
