@@ -211,6 +211,8 @@ func _install_all(ids: PackedStringArray) -> Dictionary:
 			summary["folders"][id] = result["package_folder"]
 		else:
 			summary["failed"][id] = result["error"]
+			if result.get("fallback_version", "") != "":
+				summary["failed"][id] += " An older version (%s) may work: select the plugin and use Install version…." % result["fallback_version"]
 	return summary
 
 
@@ -555,8 +557,23 @@ func _install(state: PluginState, force: bool, version: String, pin: bool) -> Di
 		_save_lock()
 		if result["restart_recommended"]:
 			restart_recommended.emit()
+	elif result.get("load_failed", false):
+		# The plugin does not run here: the newest release may need another Godot than the older ones.
+		result["fallback_version"] = _older_version(state.id, target)
 	await refresh()
 	return result
+
+
+## The newest offered version in range that is older than failed, "" when there is none.
+func _older_version(id: String, failed: String) -> String:
+	var failed_version := LoadoutVersion.parse(failed)
+	if failed_version == null:
+		return ""
+	for release in available_versions(id):
+		var number := LoadoutVersion.parse(release["version"])
+		if release["in_range"] and release["offered"] and number != null and number.compare(failed_version) < 0:
+			return release["version"]
+	return ""
 
 
 func _uninstall(state: PluginState) -> Dictionary:

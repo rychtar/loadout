@@ -640,6 +640,11 @@ func _handle_result(result: Variant) -> void:
 						% [result["error"], package_folder], "Use %s" % package_folder, func() -> Variant:
 							var error := await manager.set_registry_folder(folder_id, package_folder)
 							return error if error != "" else await manager.install(folder_id, false, version, pin))
+			elif result.get("fallback_version", "") != "":
+				var plugin_id: String = result["id"]
+				var older: String = result["fallback_version"]
+				_ask("%s\n\nTry the older version %s? It is pinned in this project, so the newer one is not offered again here." % [result["error"], older],
+						"Install %s" % older, func() -> Dictionary: return await manager.install(plugin_id, false, older, true))
 			elif result.get("needs_confirmation", "") != "":
 				var id: String = result["id"]
 				_ask(result["error"] + "\n\nOverwrite anyway? The current content is backed up.", "Overwrite",

@@ -504,3 +504,12 @@ func test_github_ignores_a_next_page_on_another_host() -> void:
 	var listed := await source.list_releases()
 	check(listed["ok"], "first page is enough")
 	check_eq(http.requests.size(), 1, "the token is not sent to another host")
+
+
+func test_failed_install_mentions_the_godot_version() -> void:
+	var env := _install_env("godot_hint")
+	(env["editor"] as FakeEditor).not_starting_versions.append("1.0.0")
+	var result: Dictionary = await env["installer"].install(env["entry"], env["source"], "1.0.0")
+	check(not result["ok"], "plugin that does not start is refused")
+	var version := Engine.get_version_info()
+	check(result["error"].contains("Godot %d.%d" % [version["major"], version["minor"]]), "the error names the running Godot: %s" % result["error"])

@@ -121,3 +121,38 @@ func _fake_source(versions: Dictionary) -> FakeSource:
 	var source := FakeSource.new(typed)
 	fake_sources["fake_a"] = source
 	return source
+
+
+func test_a_version_that_does_not_start_suggests_an_older_one() -> void:
+	_setup("fallback", [_local("fake_a", "1.0.0")])
+	_fake_source({ "1.0.0": "1.0.0", "1.1.0": "1.1.0" })
+	var manager := _manager("project")
+	last_editor.not_starting_versions.append("1.1.0")
+	await manager.refresh()
+	var result: Dictionary = await manager.install("fake_a")
+	check(not result["ok"] and result["load_failed"], "the newest version does not start")
+	check_eq(result.get("fallback_version"), "1.0.0", "the next older release is suggested")
+	var again: Dictionary = await manager.install("fake_a", false, "1.0.0", true)
+	check(again["ok"], "and it works: %s" % again["error"])
+	check_eq(again.get("fallback_version", ""), "", "nothing older to suggest after a success")
+
+
+func test_install_missing_reports_the_older_version() -> void:
+	_setup("fallback_all", [_local("fake_a", "1.0.0")])
+	_fake_source({ "1.0.0": "1.0.0", "1.1.0": "1.1.0" })
+	var manager := _manager("project")
+	last_editor.not_starting_versions.append("1.1.0")
+	await manager.refresh()
+	var summary: Dictionary = await manager.install_missing()
+	check(summary["failed"].has("fake_a") and summary["failed"]["fake_a"].contains("1.0.0"), "the failure text names the older version: %s" % summary["failed"])
+
+
+func test_download_failure_is_not_a_load_failure() -> void:
+	_setup("fallback_download", [_local("fake_a", "1.0.0")])
+	var source := _fake_source({ "1.0.0": "1.0.0", "1.1.0": "1.1.0" })
+	var manager := _manager("project")
+	await manager.refresh()
+	source.versions.erase("1.1.0")
+	source.releases.append({ "version": "1.1.0", "tag": "v1.1.0", "prerelease": false, "notes": "", "url": "", "download_url": "" })
+	var result: Dictionary = await manager.install("fake_a")
+	check(not result["ok"] and not result["load_failed"], "a failed download says nothing about the Godot version")

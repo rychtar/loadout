@@ -74,7 +74,9 @@ func check_overwrite(entry: LoadoutRegistry.Entry, lock_entry: LoadoutLockfile.E
 
 ## Installs version of the plugin from source, replacing an installed version.
 ## Returns { "ok", "error", "id", "from", "to", "hash", "backup_path", "restored",
-## "restart_recommended", "needs_confirmation" }. The caller records "hash" in the lock.
+## "restart_recommended", "needs_confirmation", "load_failed" }. The caller records "hash" in the lock.
+## load_failed: the files were fine but the plugin did not compile or start (often written for
+## another Godot version), so an older release may work.
 func install(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: String,
 		lock_entry: LoadoutLockfile.Entry = null, force: bool = false, enable: bool = true) -> Dictionary:
 	var result := _new_result(entry, version)
@@ -214,7 +216,7 @@ func _install_fresh(entry: LoadoutRegistry.Entry, staged: String, enable: bool, 
 		Fs.remove_dir(target)
 		result["error"] = "Copying to %s failed: %s" % [target, error_string(err)]
 		return
-	var problem := await _check_new_files(target, "Plugin %s" % entry.id)
+	var problem := await _check_new_files(target, "Plugin %s" % entry.id, result)
 	if problem != "":
 		await _discard(entry)
 		result["error"] = problem
@@ -224,7 +226,8 @@ func _install_fresh(entry: LoadoutRegistry.Entry, staged: String, enable: bool, 
 		if not editor.is_plugin_running(entry.folder):
 			await editor.set_plugin_enabled(entry.folder, false)
 			await _discard(entry)
-			result["error"] = "Plugin %s could not be enabled." % entry.id
+			result["load_failed"] = true
+			result["error"] = "Plugin %s could not be enabled.%s" % [entry.id, _godot_hint()]
 			return
 	editor.save_project_settings()
 	result["restart_recommended"] = not editor.stale_classes(target).is_empty()
@@ -254,7 +257,7 @@ func _replace(entry: LoadoutRegistry.Entry, staged: String, result: Dictionary) 
 		await _fail_and_restore(entry, backup, was_enabled, result, "Copying to %s failed: %s" % [target, error_string(err)])
 		return
 	# 4. Scan, refresh stale scripts, validate before enabling
-	var problem := await _check_new_files(target, "The new version of %s" % entry.id)
+	var problem := await _check_new_files(target, "The new version of %s" % entry.id, result)
 	if problem != "":
 		await _fail_and_restore(entry, backup, was_enabled, result, problem)
 		return
@@ -262,7 +265,8 @@ func _replace(entry: LoadoutRegistry.Entry, staged: String, result: Dictionary) 
 	if was_enabled:
 		await editor.set_plugin_enabled(entry.folder, true)
 		if not editor.is_plugin_running(entry.folder):
-			await _fail_and_restore(entry, backup, was_enabled, result, "The new version of %s could not be enabled." % entry.id)
+			result["load_failed"] = true
+			await _fail_and_restore(entry, backup, was_enabled, result, "The new version of %s could not be enabled.%s" % [entry.id, _godot_hint()])
 			return
 	editor.save_project_settings()
 	result["restart_recommended"] = not editor.stale_classes(target).is_empty()
@@ -271,14 +275,15 @@ func _replace(entry: LoadoutRegistry.Entry, staged: String, result: Dictionary) 
 
 ## Step 4: scans the new files in, reloads stale scripts and validates the entry script. Returns ""
 ## or the problem; subject names what was installed ("Plugin x").
-func _check_new_files(target: String, subject: String) -> String:
+func _check_new_files(target: String, subject: String, result: Dictionary) -> String:
 	if not await editor.scan():
 		return "The filesystem scan did not finish in time."
 	var err := editor.refresh_scripts(target)
 	if err == OK:
 		err = editor.validate_plugin(target)
 	if err != OK:
-		return "%s has a broken script (%s)." % [subject, error_string(err)]
+		result["load_failed"] = true
+		return "%s has a broken script (%s).%s" % [subject, error_string(err), _godot_hint()]
 	return ""
 
 
@@ -379,11 +384,18 @@ func _prune_backups(plugin_backups: String, keep: String) -> void:
 			excess -= 1
 
 
+## A plugin that fails to load is often written for another Godot version (a newer API, or one
+## that was removed), and the release does not say which it needs.
+func _godot_hint() -> String:
+	var version := Engine.get_version_info()
+	return " It may not support Godot %d.%d, which is running now." % [version["major"], version["minor"]]
+
+
 func _new_result(entry: LoadoutRegistry.Entry, version: String) -> Dictionary:
 	return {
 		"ok": false, "error": "", "id": entry.id, "from": installed_version(entry), "to": version,
 		"hash": "", "backup_path": "", "restored": false, "restart_recommended": false, "needs_confirmation": "",
-		"warning": "", "package_folder": "",
+		"warning": "", "package_folder": "", "load_failed": false,
 	}
 
 
