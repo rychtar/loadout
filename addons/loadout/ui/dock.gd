@@ -478,7 +478,7 @@ func _add_actions(state: LoadoutManager.PluginState) -> void:
 
 
 func _confirm_update(state: LoadoutManager.PluginState) -> void:
-	var backup := "user://loadout_backup/%s/%s/" % [state.id, state.installed_version]
+	var backup := "user://loadout_backup/%s/" % state.id
 	if state.entry.folder == LoadoutManager.SELF_FOLDER:
 		_ask("Update Loadout %s → %s?%s\n\nLoadout replaces its files (backup in %s) and the editor restarts right away. Unsaved scenes are saved before the restart."
 				% [state.installed_version, state.target_version, _notes_text(state), backup],
@@ -625,17 +625,20 @@ func _handle_result(result: Variant) -> void:
 				if notice != "":
 					_show_alert(notice)
 				return
+			# After a confirmation the action is repeated with the version and pin the user chose.
+			var version: String = result.get("version", "")
+			var pin: bool = result.get("pin", false)
 			if result.get("needs_confirmation", "") == LoadoutInstaller.CONFIRM_FOLDER:
 				var folder_id: String = result["id"]
 				var package_folder: String = result["package_folder"]
 				_ask("%s\n\nPlugins often use fixed res://addons/<folder>/ paths and break under another name. Use addons/%s in the registry and install?"
 						% [result["error"], package_folder], "Use %s" % package_folder, func() -> Variant:
 							var error := await manager.set_registry_folder(folder_id, package_folder)
-							return error if error != "" else await manager.install(folder_id))
+							return error if error != "" else await manager.install(folder_id, false, version, pin))
 			elif result.get("needs_confirmation", "") != "":
 				var id: String = result["id"]
 				_ask(result["error"] + "\n\nOverwrite anyway? The current content is backed up.", "Overwrite",
-						func() -> Dictionary: return await manager.install(id, true))
+						func() -> Dictionary: return await manager.install(id, true, version, pin))
 			elif result.get("error", "") != "":
 				_show_alert(result["error"])
 		TYPE_INT:

@@ -245,7 +245,12 @@ func available_versions(id: String) -> Array[Dictionary]:
 ## Without force a modified, pinned or unmanaged folder is left alone and the result has
 ## "needs_confirmation" set.
 func install(id: String, force: bool = false, version: String = "", pin: bool = false) -> Dictionary:
-	return await _exclusive(id, func(state: PluginState) -> Dictionary: return await _install(state, force, version, pin))
+	var result: Dictionary = await _exclusive(id, func(state: PluginState) -> Dictionary: return await _install(state, force, version, pin))
+	if result.get("needs_confirmation", "") != "":
+		# What the caller needs to repeat the action after the user confirms.
+		result["version"] = version
+		result["pin"] = pin
+	return result
 
 
 ## Removes the plugin from the project and ignores it here so the sync does not bring it back.

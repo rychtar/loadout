@@ -73,3 +73,19 @@ func test_removal_in_another_editor_is_not_undone() -> void:
 	check_eq(await b.remove_registry_entry("one"), OK, "B removes one")
 	check_eq(await a.update_registry_entry("two", { "source": _local("two", "1.1.0")["source"], "range": "*" }), "", "A edits two")
 	check_eq(_ids_in_registry_file(), PackedStringArray(["two"]), "the removal of one is kept")
+
+
+func test_confirmation_result_carries_the_chosen_version_and_pin() -> void:
+	_setup("confirm_version", [_local("fake_a", "1.0.0")])
+	var source := FakeSource.new({ "1.0.0": FIXTURES.path_join("1.0.0"), "1.1.0": FIXTURES.path_join("1.1.0") })
+	fake_sources["fake_a"] = source
+	var manager := _manager("project")
+	await manager.refresh()
+	await manager.install("fake_a", false, "1.1.0", false)
+	write_text(root.path_join("project/addons/fake_a/plugin.gd"), "# edited by hand")
+	await manager.refresh()
+	var refused: Dictionary = await manager.install("fake_a", false, "1.0.0", true)
+	check_eq(refused["needs_confirmation"], Installer.CONFIRM_MODIFIED, "needs confirmation")
+	# The dock repeats the action after "Overwrite" with exactly what the user chose.
+	check_eq(refused.get("version"), "1.0.0", "result names the version the user chose")
+	check_eq(refused.get("pin"), true, "and the pin choice")
