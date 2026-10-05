@@ -221,3 +221,15 @@ func test_staging_is_cleaned_after_a_rolled_back_update() -> void:
 	var result: Dictionary = await installer.install(env["entry"], source, "1.2.0", null, true)
 	check(not result["ok"] and result["restored"], "rolled back")
 	check(not DirAccess.dir_exists_absolute(env["root"].path_join("staging/fake_a")), "staging folder removed after rollback")
+
+
+func test_self_update_validates_the_new_scripts_before_swapping() -> void:
+	var env := _install_env("selfupdate")
+	var installer: Installer = env["installer"]
+	var source: FakeSource = env["source"]
+	source.versions["1.2.0"] = FIXTURES.path_join("1.2.0_broken")
+	await installer.install(env["entry"], source, "1.0.0")
+	(env["editor"] as FakeEditor).broken_versions.append("1.2.0")
+	var result: Dictionary = await installer.self_update(env["entry"], source, "1.2.0")
+	check(not result["ok"], "self_update refuses a staged copy whose scripts do not compile (otherwise Loadout is broken after the restart and cannot repair itself)")
+	check_eq(installer.installed_version(env["entry"]), "1.0.0", "the running files are untouched")

@@ -454,7 +454,7 @@ func test_self_update_requests_restart() -> void:
 	var result: Dictionary = await manager.install("loadout")
 	check(result["ok"], "ok: %s" % result["error"])
 	check_eq(restarts[0], 1, "restart requested")
-	check(editor.calls.is_empty(), "Loadout never disabled itself")
+	check_eq(editor.calls, PackedStringArray(["validate_scripts"]), "Loadout was only validated, never disabled or scanned")
 	check_eq(_saved_lock().get_entry("loadout").version, "0.0.2", "lock updated before the restart")
 
 

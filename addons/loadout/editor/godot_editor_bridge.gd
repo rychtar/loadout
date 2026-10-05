@@ -9,6 +9,7 @@ const Log := preload("../util/log.gd")
 const ADDONS_DIR := "res://addons"
 const SCAN_TIMEOUT_MS := 30000
 const SETTLE_FRAMES := 10
+const TEMP_VALIDATE_DIR := "user://loadout_validate"
 
 var _tree: SceneTree
 
@@ -82,6 +83,34 @@ func validate_plugin(dir: String) -> Error:
 	if script == null or not script.can_instantiate():
 		return ERR_PARSE_ERROR
 	return OK
+
+
+## Scripts with a class_name cannot be loaded from a second place ("hides a global script class"),
+## so the check runs on a temporary copy with the class_name lines removed.
+func validate_scripts(dir: String) -> Error:
+	var copy := TEMP_VALIDATE_DIR.path_join(str(Time.get_ticks_usec()))
+	if Fs.copy_dir(dir, copy) != OK:
+		Fs.remove_dir(copy)
+		return ERR_CANT_CREATE
+	var class_name_line := RegEx.create_from_string("(?m)^class_name\\s+\\w+.*$")
+	var scripts: PackedStringArray = []
+	for relative in Fs.list_files(copy):
+		if relative.get_extension() == "gd":
+			var path := copy.path_join(relative)
+			var file := FileAccess.open(path, FileAccess.WRITE)
+			if file == null:
+				continue
+			file.store_string(class_name_line.sub(FileAccess.get_file_as_string(dir.path_join(relative)), "", true))
+			file.close()
+			scripts.append(path)
+	var result: Error = OK
+	for path in scripts:
+		var script := ResourceLoader.load(path, "Script", ResourceLoader.CACHE_MODE_IGNORE) as Script
+		if script == null or not script.can_instantiate():
+			Log.write("Script %s does not compile." % path.trim_prefix(copy + "/"), Log.Level.WARNING)
+			result = ERR_PARSE_ERROR
+	Fs.remove_dir(copy)
+	return result
 
 
 func save_project_settings() -> Error:

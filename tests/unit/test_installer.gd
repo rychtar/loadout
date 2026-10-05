@@ -265,7 +265,7 @@ func test_self_update_replaces_files_without_touching_the_editor() -> void:
 	check(result["ok"], "ok: %s" % result["error"])
 	check(result["restart_required"], "editor restart required")
 	check_eq(installer.installed_version(loadout), "0.0.2", "new files on disk")
-	check(editor.calls.is_empty(), "never disabled, scanned or enabled (it would stop Loadout itself)")
+	check_eq(editor.calls, PackedStringArray(["validate_scripts"]), "only validated, never disabled, scanned or enabled (it would stop Loadout itself)")
 	check(FileAccess.file_exists(root.path_join("backup/loadout/0.0.1/plugin.cfg")), "backup of the running version")
 	check_eq(FileAccess.get_file_as_string(addons.path_join("loadout/plugin.gd.uid")), "uid://loadout", "uid preserved")
 	check_eq(result["hash"], Fs.hash_dir(addons.path_join("loadout")), "hash")

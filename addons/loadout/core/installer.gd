@@ -132,6 +132,11 @@ func self_update(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: S
 		return _fail(result, fetched["error"])
 	var staged: String = fetched["path"]
 	var target := target_dir(entry)
+	# Loadout cannot repair itself after a restart, so the new scripts must compile before the swap.
+	var invalid := editor.validate_scripts(staged)
+	if invalid != OK:
+		Fs.remove_dir(staging)
+		return _fail(result, "The new version of Loadout has a broken script (%s), nothing was changed." % error_string(invalid))
 	_preserve_uids(target, staged)
 	var backup := _backup_path(entry, result["from"])
 	var err := _copy_fresh(target, backup)
