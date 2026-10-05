@@ -70,10 +70,10 @@ static func _plugin_prefix(files: PackedStringArray, folder: String) -> Dictiona
 	if candidates.size() == 1:
 		chosen = candidates[0]
 	else:
+		# A repo may carry copies of the plugin (demo or test projects): the shallowest one is the plugin.
 		for candidate in candidates:
-			if candidate.get_file() == folder:
+			if candidate.get_file() == folder and (chosen == "" or candidate.count("/") < chosen.count("/")):
 				chosen = candidate
-				break
 	if chosen == "" and not candidates.has(""):
 		return { "prefix": "", "error": "The package has several plugins (%s) and none is called %s." % [", ".join(candidates), folder] }
 	return { "prefix": chosen + "/" if chosen != "" else "", "error": "" }

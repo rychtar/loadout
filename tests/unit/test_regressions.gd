@@ -406,3 +406,15 @@ func test_old_backups_are_pruned() -> void:
 	var kept := DirAccess.get_directories_at(env["root"].path_join("backup/fake_a"))
 	check_eq(kept.size(), Installer.MAX_BACKUPS, "only the newest backups are kept")
 	check(DirAccess.dir_exists_absolute(last), "the backup just made survives")
+
+
+func test_zip_prefers_the_shallowest_copy_of_the_plugin() -> void:
+	var root := temp_dir("zip_demo_copy")
+	var zip := root.path_join("a.zip")
+	# A demo project inside the repo ships its own copy of the plugin; here it is listed first.
+	make_raw_zip(zip, {
+		"repo-1/Demo/addons/foo/plugin.cfg": "demo copy", "repo-1/Demo/addons/foo/a.gd": "demo",
+		"repo-1/addons/foo/plugin.cfg": "real", "repo-1/addons/foo/a.gd": "real" })
+	var result := Zip_.extract_plugin(zip, "foo", root.path_join("out"))
+	check(result["ok"], "extracts: %s" % result["error"])
+	check_eq(FileAccess.get_file_as_string(root.path_join("out/plugin.cfg")), "real", "the plugin at addons/foo, not the demo's copy")
