@@ -70,6 +70,9 @@ var states: Array[PluginState] = []
 var unregistered: Array[Dictionary] = []
 ## Folders of unregistered plugins already known (present at the last refresh or announced).
 var _seen_addons: Dictionary[String, bool] = {}
+## False until the first refresh() has finished (remote sources can take a while), so the dock does
+## not claim the registry is empty meanwhile.
+var loaded := false
 ## True while an install or update runs; other actions are refused meanwhile.
 var busy := false
 
@@ -112,6 +115,7 @@ func refresh(check_updates: bool = false) -> void:
 	unregistered.assign(_scan_unregistered() if _registry_ok else [])
 	for info in unregistered:
 		_seen_addons[info["folder"]] = true
+	loaded = true
 	states_changed.emit()
 
 

@@ -419,7 +419,12 @@ func _update_detail() -> void:
 	var state := manager.get_state(_selected_id)
 	if state == null:
 		_detail_title.text = ""
-		_detail_message.text = "The registry is empty. Add a plugin with the + button." if manager.states.is_empty() and manager.errors.is_empty() else "Select a plugin in the list."
+		if not manager.loaded:
+			_detail_message.text = "Reading the registry and checking the sources…"
+		elif manager.states.is_empty() and manager.errors.is_empty():
+			_detail_message.text = "The registry is empty. Add a plugin with the + button."
+		else:
+			_detail_message.text = "Select a plugin in the list."
 		return
 	var folder := state.entry.folder if state.entry != null else state.id
 	_detail_title.text = "%s  (addons/%s)" % [state.display_name, folder]

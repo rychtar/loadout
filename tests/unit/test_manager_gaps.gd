@@ -100,3 +100,11 @@ func test_local_plugin_with_an_invalid_version_says_so() -> void:
 	var latest := await source.get_latest_version("*")
 	check(not latest["ok"], "not installable")
 	check(not latest["error"].contains("does not match range"), "the message blames the version, not the range: %s" % latest["error"])
+
+
+func test_manager_reports_when_the_first_refresh_is_done() -> void:
+	_setup("loaded", [_local("fake_a", "1.0.0")])
+	var manager := _manager("project")
+	check(not manager.loaded, "not loaded before the first refresh (the dock must not say 'registry is empty')")
+	await manager.refresh()
+	check(manager.loaded, "loaded after it")
