@@ -217,7 +217,8 @@ func install_updates() -> Dictionary:
 
 
 ## Versions the plugin's source offers, newest first: [{ "version", "tag", "prerelease",
-## "notes", "url", "in_range": bool }]. Asset Library and local sources offer one version.
+## "notes", "url", "in_range": bool, "offered": bool (false for a pre-release the source flags
+## although its number is a plain version: it is never "the newest", but can be picked) }]. Asset Library and local sources offer one version.
 func available_versions(id: String) -> Array[Dictionary]:
 	var list: Array[Dictionary] = []
 	var state := get_state(id)
@@ -235,6 +236,7 @@ func available_versions(id: String) -> Array[Dictionary]:
 			"version": version, "tag": str(release.get("tag", version)), "prerelease": bool(release.get("prerelease", false)),
 			"notes": str(release.get("notes", "")), "url": str(release.get("url", "")),
 			"in_range": number.matches(state.entry.version_range),
+			"offered": LoadoutSource.is_offered(release),
 		})
 	list.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return parsed[a["version"]].compare(parsed[b["version"]]) > 0)
 	return list

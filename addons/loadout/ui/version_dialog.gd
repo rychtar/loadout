@@ -49,7 +49,7 @@ func open_for(state: LoadoutManager.PluginState, versions: Array[Dictionary]) ->
 	_versions = versions
 	_newest_in_range = ""
 	for release in versions:
-		if release["in_range"]:
+		if release["in_range"] and release["offered"]:
 			_newest_in_range = release["version"]
 			break
 	title = "Install a version of %s" % state.display_name
