@@ -280,7 +280,9 @@ func _search() -> void:
 	_search_button.disabled = true
 	_search_status.text = "Searching…"
 	_results.clear()
-	_store_asset = ""
+	if _editing_id == "":
+		# When editing, the entry's current asset stays until another result is picked.
+		_store_asset = ""
 	var result: Dictionary = await store_search.call(_query_edit.text)
 	_search_button.disabled = false
 	if not result["ok"]:
@@ -329,17 +331,19 @@ func _on_browse_pressed() -> void:
 
 func _on_dir_selected(dir: String) -> void:
 	_path_edit.text = dir
-	_update_from_path()
+	_update_from_path(true)
 
 
-func _update_from_path() -> void:
+## rewrite: replace a project folder by the plugin folder inside it. Not while typing, the text
+## would jump under the cursor; _source_data() resolves the folder either way.
+func _update_from_path(rewrite: bool = false) -> void:
 	var path := _plugin_dir(_path_edit.text.strip_edges())
 	var cfg := ConfigFile.new()
 	if path == "" or cfg.load(path.path_join("plugin.cfg")) != OK:
 		_info_label.text = "Select a folder that contains plugin.cfg." if _path_edit.text.strip_edges() != "" else ""
 		_validate()
 		return
-	if path != _path_edit.text.strip_edges():
+	if rewrite and path != _path_edit.text.strip_edges():
 		_path_edit.text = path
 	_info_label.text = "Found plugin %s, version %s." % [cfg.get_value("plugin", "name", "?"), cfg.get_value("plugin", "version", "?")]
 	if _auto_names:
@@ -394,7 +398,9 @@ func _source_data() -> Dictionary:
 			if _store_asset == "" and not _legacy_source.is_empty():
 				return _legacy_source
 			return { "type": LoadoutRegistry.SOURCE_STORE, "asset": _store_asset }
-	return { "type": LoadoutRegistry.SOURCE_LOCAL, "path": _path_edit.text.strip_edges() }
+	var typed := _path_edit.text.strip_edges()
+	var plugin_dir := _plugin_dir(typed)
+	return { "type": LoadoutRegistry.SOURCE_LOCAL, "path": plugin_dir if plugin_dir != "" else typed }
 
 
 func _on_confirmed() -> void:

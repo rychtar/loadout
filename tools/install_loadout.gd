@@ -24,7 +24,13 @@ func _initialize() -> void:
 		quit(2)
 		return
 	if not project.is_absolute_path():
-		project = OS.get_environment("PWD").path_join(project)
+		# Godot changes its working directory to --path, only the shell's PWD knows where the user was.
+		var start_dir := OS.get_environment("PWD")
+		if start_dir == "":
+			Log.write("Give the project folder as an absolute path (this shell does not tell Godot where it started).", Log.Level.ERROR)
+			quit(2)
+			return
+		project = start_dir.path_join(project)
 	project = project.simplify_path()
 
 	var result := Setup.install(ProjectSettings.globalize_path(LOADOUT_DIR), project, force)
