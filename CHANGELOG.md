@@ -13,6 +13,9 @@
 - A failed first update check (nothing cached) is retried after 15 minutes instead of a day, and a check time in the future no longer blocks checks.
 - An empty leftover `addons/<id>/` folder counts as not installed.
 - `Thumbs.db` and `desktop.ini` no longer make a plugin look edited by hand.
+- With two editors open, adding, editing, removing or importing a registry entry no longer undoes what the other editor saved: every change starts from the registry file on disk.
+- "Overwrite anyway?" after choosing a version in "Install version…" installs that version (and keeps the pin choice) instead of the newest one.
+- A local plugin whose plugin.cfg version is not valid (e.g. `1.2.3.4`) says so instead of "does not match range *". The version dialog no longer marks a release flagged as pre-release as the newest.
 - Stricter validation: GitHub repos `owner/..` and `owner/name.git`, Windows device names and trailing dots in folder names, version numbers that overflow, numeric prerelease identifiers with leading zeros, zips that unpack to more than 512 MB or 20000 files, and a release without a download link now gives a clear message.
 
 ## 0.1.1
