@@ -446,3 +446,31 @@ func test_sources_survive_values_of_the_wrong_type() -> void:
 	var github := GithubSource.new("owner/mono", "mono", http)
 	check((await github.list_releases())["ok"], "github release with an odd prerelease flag")
 	check((await StoreSource.search(http, "x", ""))["ok"], "store search with an odd price")
+
+
+func test_registry_keeps_fields_it_does_not_know() -> void:
+	# Projects run different Loadout versions against one registry file: a newer version's extra
+	# fields must survive a save by an older one.
+	var path := temp_dir("probe_unknown_registry").path_join("loadout_registry.json")
+	write_text(path, JSON.stringify({ "schema": 1, "future": { "a": 1 }, "plugins": [
+		{ "id": "gut", "folder": "gut", "source": { "type": "github", "repo": "bitwes/Gut", "channel": "beta" }, "range": "*", "auto_install": true, "note": "mine" }] }))
+	var loaded := Registry.load_file(path)
+	check_eq(loaded["registry"].save_file(path), OK, "saved")
+	var saved: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(path))
+	check(saved.has("future"), "top-level field kept")
+	var entry: Dictionary = saved["plugins"][0]
+	check_eq(entry.get("note"), "mine", "entry field kept")
+	check_eq((entry["source"] as Dictionary).get("channel"), "beta", "source field kept")
+
+
+func test_lock_keeps_fields_it_does_not_know() -> void:
+	var path := temp_dir("probe_unknown_lock").path_join("loadout.lock.json")
+	write_text(path, JSON.stringify({ "schema": 1, "future": true, "ignored": [], "plugins": {
+		"gut": { "version": "9.0.0", "pinned": false, "hash": "", "installed_at": "2026-10-01", "channel": "beta" } } }))
+	var loaded := Lockfile.load_file(path)
+	loaded["lockfile"].set_pinned("gut", true)
+	check_eq(loaded["lockfile"].save_file(path), OK, "saved")
+	var saved: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(path))
+	check(saved.has("future"), "top-level field kept")
+	check_eq(saved["plugins"]["gut"].get("channel"), "beta", "entry field kept")
+	check_eq(saved["plugins"]["gut"].get("pinned"), true, "known fields still change")
