@@ -10,6 +10,8 @@ const Log := preload("../util/log.gd")
 
 ## Loadout's own folder: it can be updated (installer.self_update + editor restart), never removed.
 const SELF_FOLDER := "loadout"
+## Files listed per kind in changed_files().
+const MAX_DIFF_LINES := 15
 const REGISTRY_UNREADABLE := "The registry cannot be read, nothing changed."
 
 ## Emitted after refresh() and after every action, the dock rebuilds from `states`.
@@ -261,6 +263,27 @@ func available_backups(id: String) -> Array[Dictionary]:
 ## Returns the installer result.
 func restore_backup(id: String, backup_path: String, pin: bool = true) -> Dictionary:
 	return await _exclusive(id, func(state: PluginState) -> Dictionary: return await _restore_backup(state, backup_path, pin))
+
+
+## Which files of the plugin differ from the version Loadout installed (downloads that version again
+## to compare). Returns { "ok", "error", "info": text for the user, "diff": { modified, added, removed } }.
+func changed_files(id: String) -> Dictionary:
+	var state := get_state(id)
+	if busy or state == null or state.entry == null or state.lock_entry == null:
+		return { "ok": false, "error": "Nothing to compare: the plugin is not installed by Loadout, or another action is running." }
+	var source: LoadoutSource = _sources.get(id)
+	var version := state.lock_entry.version
+	if source == null or not await source.has_version(version):
+		return { "ok": false, "error": "The source no longer offers %s %s, so there is nothing to compare with." % [state.display_name, version] }
+	var staging := installer.staging_root.path_join("%s_compare" % id)
+	Fs.remove_dir(staging)
+	var fetched: Dictionary = await source.fetch(version, staging)
+	if not fetched["ok"]:
+		Fs.remove_dir(staging)
+		return { "ok": false, "error": "Downloading %s %s to compare failed: %s" % [state.display_name, version, fetched["error"]] }
+	var diff := Fs.diff_dirs(str(fetched["path"]), installer.target_dir(state.entry))
+	Fs.remove_dir(staging)
+	return { "ok": true, "error": "", "diff": diff, "info": _describe_diff(state, version, diff) }
 
 
 ## Installs or updates the plugin to its target version, or to version when given (an explicit
@@ -615,6 +638,20 @@ func _restore_backup(state: PluginState, backup_path: String, pin: bool) -> Dict
 			restart_recommended.emit()
 	await refresh()
 	return result
+
+
+func _describe_diff(state: PluginState, version: String, diff: Dictionary) -> String:
+	var lines: PackedStringArray = ["Compared with %s %s as Loadout installed it:" % [state.display_name, version]]
+	var labels := { "modified": "changed", "added": "added", "removed": "missing" }
+	for key in ["modified", "added", "removed"]:
+		var files: Array = diff[key]
+		for index in mini(files.size(), MAX_DIFF_LINES):
+			lines.append("•  %s: %s" % [labels[key], files[index]])
+		if files.size() > MAX_DIFF_LINES:
+			lines.append("•  … and %d more %s" % [files.size() - MAX_DIFF_LINES, labels[key]])
+	if lines.size() == 1:
+		lines.append("No file differs (the folder hash changed through files Loadout ignores, or the hash was never recorded).")
+	return "\n".join(lines)
 
 
 func _uninstall(state: PluginState) -> Dictionary:

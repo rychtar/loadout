@@ -165,6 +165,34 @@ func test_restore_refuses_a_path_that_is_not_a_backup() -> void:
 	check(not result["ok"], "only backups the installer made can be restored")
 
 
+func test_changed_files_lists_the_differences() -> void:
+	_setup("changed", [_local("fake_a", "1.0.0")])
+	_fake_source({ "1.0.0": "1.0.0" })
+	var manager := _manager("project")
+	await manager.refresh()
+	await manager.install("fake_a")
+	var dir := root.path_join("project/addons/fake_a")
+	write_text(dir.path_join("plugin.gd"), "# edited")
+	write_text(dir.path_join("notes.txt"), "mine")
+	DirAccess.remove_absolute(dir.path_join("fake_a_util.gd"))
+	await manager.refresh()
+	var result: Dictionary = await manager.changed_files("fake_a")
+	check(result["ok"], "compared: %s" % result["error"])
+	check_eq(result["diff"]["modified"], ["plugin.gd"], "edited file")
+	check_eq(result["diff"]["added"], ["notes.txt"], "added file")
+	check_eq(result["diff"]["removed"], ["fake_a_util.gd"], "deleted file")
+	check(result["info"].contains("changed: plugin.gd") and result["info"].contains("added: notes.txt") and result["info"].contains("missing: fake_a_util.gd"), "readable text: %s" % result["info"])
+	check(not DirAccess.dir_exists_absolute(root.path_join("project_staging/fake_a_compare")), "no leftovers")
+
+
+func test_changed_files_without_a_lock_entry() -> void:
+	_setup("changed_none", [_local("fake_a", "1.0.0")])
+	_fake_source({ "1.0.0": "1.0.0" })
+	var manager := _manager("project")
+	await manager.refresh()
+	check(not (await manager.changed_files("fake_a"))["ok"], "not installed by Loadout: nothing to compare")
+
+
 func test_a_version_that_does_not_start_suggests_an_older_one() -> void:
 	_setup("fallback", [_local("fake_a", "1.0.0")])
 	_fake_source({ "1.0.0": "1.0.0", "1.1.0": "1.1.0" })

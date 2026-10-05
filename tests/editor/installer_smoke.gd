@@ -124,6 +124,8 @@ func _run_dock() -> void:
 		return
 	await _dock_versions()
 	await _dock_update()
+	await _dock_changes()
+	await _dock_restore()
 	await _dock_edit()
 	await _dock_add_dialogs()
 	await _dock_new_addon()
@@ -195,6 +197,57 @@ func _dock_update() -> void:
 		await _screenshot("dock_restart_offer", _confirm)
 		_confirm.get_cancel_button().pressed.emit()
 		await _dialog_closed(_confirm)
+
+
+## A file added by hand makes the plugin Modified; "Show changes…" lists it.
+func _dock_changes() -> void:
+	var notes := "res://addons/fake_a/notes.txt"
+	_write_text(notes, "mine")
+	await _manager.refresh()
+	_expect(_status_of("fake_a") == LoadoutManager.Status.MODIFIED, "an added file makes the plugin Modified")
+	_select_first_plugin()
+	var button := _find_button(_dock, "Show changes")
+	_expect(button != null, "Show changes offered for a modified plugin")
+	if button != null:
+		var alert: AcceptDialog = _dock.get("_alert")
+		button.pressed.emit()
+		await _wait_until(func() -> bool: return alert.visible, 10000)
+		_expect(alert.dialog_text.contains("added: notes.txt"), "the changes name the added file (%s)" % alert.dialog_text)
+		await _screenshot("dock_changes", alert)
+		alert.hide()
+		await _dialog_closed(alert)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(notes))
+	await _manager.refresh()
+	_expect(_status_of("fake_a") == LoadoutManager.Status.OK, "back to OK without the file")
+
+
+## Restore the backup the update made (1.0.0, pinned), then the newer files again from the next backup.
+func _dock_restore() -> void:
+	var dialog: ConfirmationDialog = _dock.get("_backup_dialog")
+	for expected in ["1.0.0", "1.1.0"]:
+		_select_first_plugin()
+		var button := _find_button(_dock, "Restore backup")
+		_expect(button != null, "Restore backup offered once a backup exists")
+		if button == null:
+			return
+		button.pressed.emit()
+		await _wait_until(func() -> bool: return dialog.visible, 5000)
+		var list: ItemList = dialog.get("_list")
+		_expect(list.item_count >= 1 and list.get_item_text(0).begins_with(expected), "newest backup is %s (%s)" % [expected, list.get_item_text(0) if list.item_count > 0 else "none"])
+		await _screenshot("dock_restore_%s" % expected, dialog)
+		(dialog.get("_pin_check") as CheckBox).button_pressed = expected == "1.0.0"
+		dialog.get_ok_button().pressed.emit()
+		await _wait_until(func() -> bool: return not _dock.get("_busy") and _installed_version() == expected, 30000)
+		_expect_running(expected, "restored %s from the dock" % expected)
+		if await _wait_until(func() -> bool: return _confirm.visible, 3000):
+			_confirm.get_cancel_button().pressed.emit()
+			await _dialog_closed(_confirm)
+		await _dialog_closed(dialog)
+	_expect(_status_of("fake_a") == LoadoutManager.Status.OK, "back at 1.1.0, not pinned")
+
+
+func _installed_version() -> String:
+	return _cfg_version("res://addons/fake_a/plugin.cfg")
 
 
 ## Edit the entry: a narrower range, saved to the registry; id and folder stay fixed.

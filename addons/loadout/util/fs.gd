@@ -86,6 +86,18 @@ static func hash_dir(path: String) -> String:
 		return ""
 	var context := HashingContext.new()
 	context.start(HashingContext.HASH_SHA256)
+	var hashes := file_hashes(path)
+	var relatives: Array = hashes.keys()
+	relatives.sort()
+	for relative: String in relatives:
+		context.update(("%s\n%s\n" % [relative, hashes[relative]]).to_utf8_buffer())
+	return "sha256:" + context.finish().hex_encode()
+
+
+## { relative path: sha256 hex of the content } of the files hash_dir() looks at (same ignore and
+## CRLF rules), for finding out which files differ.
+static func file_hashes(path: String) -> Dictionary:
+	var hashes := {}
 	for relative in list_files(path):
 		var file_name := relative.get_file()
 		if HASH_IGNORED_NAMES.has(file_name.to_lower()) or HASH_IGNORED_EXTENSIONS.has(file_name.get_extension()):
@@ -95,8 +107,27 @@ static func hash_dir(path: String) -> String:
 		content_hash.start(HashingContext.HASH_SHA256)
 		if not content.is_empty():
 			content_hash.update(content)
-		context.update(("%s\n%s\n" % [relative, content_hash.finish().hex_encode()]).to_utf8_buffer())
-	return "sha256:" + context.finish().hex_encode()
+		hashes[relative] = content_hash.finish().hex_encode()
+	return hashes
+
+
+## How folder `current` differs from `baseline`: { "modified": [...], "added": [...], "removed": [...] }
+## with sorted relative paths (added = only in current, removed = only in baseline).
+static func diff_dirs(baseline: String, current: String) -> Dictionary:
+	var before := file_hashes(baseline)
+	var after := file_hashes(current)
+	var diff := { "modified": [], "added": [], "removed": [] }
+	for relative: String in after:
+		if not before.has(relative):
+			diff["added"].append(relative)
+		elif before[relative] != after[relative]:
+			diff["modified"].append(relative)
+	for relative: String in before:
+		if not after.has(relative):
+			diff["removed"].append(relative)
+	for key in diff:
+		diff[key].sort()
+	return diff
 
 
 ## Directory handle that lists hidden files and no "." or "..", null when it cannot be opened.

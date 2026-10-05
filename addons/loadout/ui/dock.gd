@@ -468,6 +468,7 @@ func _add_actions(state: LoadoutManager.PluginState) -> void:
 			_action("Unpin", func() -> Error: return await manager.set_pinned(id, false))
 			_remove_action(state)
 		Status.MODIFIED:
+			_action("Show changes…", func() -> Dictionary: return await manager.changed_files(id))
 			_action("Accept changes", func() -> Error: return await manager.adopt(id))
 			_overwrite_action(state)
 			_remove_action(state)
