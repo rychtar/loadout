@@ -162,6 +162,28 @@ func _install_env(name: String) -> Dictionary:
 	return { "root": root, "addons": addons, "installer": installer, "source": source, "entry": entry, "editor": editor }
 
 
+func test_force_reinstall_same_version_keeps_earlier_backup() -> void:
+	var env := _install_env("backup_overwrite")
+	var installer: Installer = env["installer"]
+	var entry: Registry.Entry = env["entry"]
+	var source: FakeSource = env["source"]
+	var first: Dictionary = await installer.install(entry, source, "1.0.0")
+	var target: String = env["addons"].path_join("fake_a")
+	write_text(target.path_join("my_edit_1.txt"), "edit one")
+	var lock := Lockfile.new()
+	lock.set_installed("fake_a", "1.0.0", first["hash"], "2026-10-01")
+	var second: Dictionary = await installer.install(entry, source, "1.0.0", lock.get_entry("fake_a"), true)
+	check(second["ok"], "force reinstall ok")
+	var backup_one: String = second["backup_path"]
+	check(FileAccess.file_exists(backup_one.path_join("my_edit_1.txt")), "first backup holds edit one")
+	write_text(target.path_join("my_edit_2.txt"), "edit two")
+	var third: Dictionary = await installer.install(entry, source, "1.0.0", lock.get_entry("fake_a"), true)
+	check(third["ok"], "second force reinstall ok")
+	check(FileAccess.file_exists(backup_one.path_join("my_edit_1.txt")), "the earlier backup (edit one) is not destroyed by the next overwrite of the same version")
+	check(FileAccess.file_exists(String(third["backup_path"]).path_join("my_edit_2.txt")), "the newest backup holds edit two")
+	check(third["backup_path"] != backup_one, "backups of one version get different folders")
+
+
 
 
 # --- round 2 --------------------------------------------------------------------------------
@@ -175,3 +197,15 @@ func test_os_junk_files_do_not_count_as_edits() -> void:
 	write_text(root.path_join("Thumbs.db"), "windows explorer")
 	write_text(root.path_join("desktop.ini"), "windows explorer")
 	check_eq(Fs_.hash_dir(root), before, "Thumbs.db / desktop.ini change the folder hash (false 'edited by hand' on Windows)")
+
+
+func test_staging_is_cleaned_after_a_rolled_back_update() -> void:
+	var env := _install_env("staging")
+	var installer: Installer = env["installer"]
+	var source: FakeSource = env["source"]
+	source.versions["1.2.0"] = FIXTURES.path_join("1.2.0_broken")
+	await installer.install(env["entry"], source, "1.0.0")
+	(env["editor"] as FakeEditor).broken_versions.append("1.2.0")
+	var result: Dictionary = await installer.install(env["entry"], source, "1.2.0", null, true)
+	check(not result["ok"] and result["restored"], "rolled back")
+	check(not DirAccess.dir_exists_absolute(env["root"].path_join("staging/fake_a")), "staging folder removed after rollback")

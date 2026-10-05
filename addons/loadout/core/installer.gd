@@ -324,8 +324,16 @@ func _preserve_uids(target: String, staged: String) -> void:
 		DirAccess.copy_absolute(target.path_join(relative), staged.path_join(relative))
 
 
+## A folder for the backup of version that does not exist yet, so an earlier backup of the same
+## version (e.g. with other manual edits) is never replaced: "1.0.0", "1.0.0-2", "1.0.0-3", ...
 func _backup_path(entry: LoadoutRegistry.Entry, version: String) -> String:
-	return backup_root.path_join(entry.id).path_join(version if version != "" else "unknown")
+	var base := backup_root.path_join(entry.id).path_join(version if version != "" else "unknown")
+	var path := base
+	var index := 2
+	while DirAccess.dir_exists_absolute(path):
+		path = "%s-%d" % [base, index]
+		index += 1
+	return path
 
 
 func _copy_fresh(src: String, dst: String) -> Error:
