@@ -308,7 +308,7 @@ func export_registry(path: String) -> Error:
 ## "warnings": PackedStringArray (invalid entries in the file) }.
 func import_registry(path: String) -> Dictionary:
 	var summary := { "ok": false, "error": "", "added": PackedStringArray(), "skipped": {}, "warnings": PackedStringArray() }
-	if not _registry_ok:
+	if not _reload_registry():
 		summary["error"] = REGISTRY_UNREADABLE
 		return summary
 	var loaded := LoadoutRegistry.load_file(path)
@@ -335,7 +335,7 @@ func import_registry(path: String) -> Dictionary:
 ## take_over: the plugin is already in this project's addons folder; its current files are
 ## recorded in the lock as installed, nothing is copied or toggled.
 func add_registry_entry(data: Dictionary, take_over: bool = false) -> String:
-	if not _registry_ok:
+	if not _reload_registry():
 		return REGISTRY_UNREADABLE
 	var error := registry.add_entry(data)
 	if error != "":
@@ -354,7 +354,7 @@ func add_registry_entry(data: Dictionary, take_over: bool = false) -> String:
 ## Replaces source, version range and auto_install of a registry entry; id and folder stay (a new
 ## folder would not move installed copies, see set_registry_folder()). Returns "" or an error message.
 func update_registry_entry(id: String, data: Dictionary) -> String:
-	if not _registry_ok:
+	if not _reload_registry():
 		return REGISTRY_UNREADABLE
 	var error := registry.update_entry(id, data)
 	if error == "":
@@ -368,7 +368,7 @@ func update_registry_entry(id: String, data: Dictionary) -> String:
 ## Changes the plugin folder of a registry entry (e.g. to the folder its package uses).
 ## Returns "" or an error message.
 func set_registry_folder(id: String, folder: String) -> String:
-	if not _registry_ok:
+	if not _reload_registry():
 		return REGISTRY_UNREADABLE
 	var error := registry.set_folder(id, folder)
 	if error == "":
@@ -382,11 +382,24 @@ func set_registry_folder(id: String, folder: String) -> String:
 
 ## Removes an entry from the global registry (installed files stay, the plugin becomes ORPHAN).
 func remove_registry_entry(id: String) -> Error:
-	if not _registry_ok or not registry.remove_entry(id):
+	if not _reload_registry() or not registry.remove_entry(id):
 		return ERR_DOES_NOT_EXIST
 	var err := registry.save_file(registry_path)
 	await refresh()
 	return err
+
+
+## The registry file is shared by every project's editor, so each change starts from what is on disk
+## now: another editor may have saved since this one last read it, and saving the older copy would
+## undo that. Returns false when the file cannot be read.
+func _reload_registry() -> bool:
+	var loaded := LoadoutRegistry.load_file(registry_path)
+	if not loaded["ok"]:
+		_registry_ok = false
+		return false
+	registry = loaded["registry"]
+	_registry_ok = true
+	return true
 
 
 ## Saves the registry. When that fails the unsaved change is dropped by reloading the file.
