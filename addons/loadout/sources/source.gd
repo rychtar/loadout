@@ -41,12 +41,17 @@ func list_releases(_etag: String = "") -> Dictionary:
 	return listing_error("The source cannot list versions.")
 
 
-## Highest known version within version_range.
+## Highest known version within version_range. A release the source flags as a pre-release is
+## skipped unless its version number says so too (then the range decides, see LoadoutVersion).
 ## Returns { "ok": bool, "error": String, "version": String }.
 func get_latest_version(version_range: String) -> Dictionary:
 	var versions: PackedStringArray = []
 	for release in releases:
-		versions.append(str(release.get("version", "")))
+		var version := str(release.get("version", ""))
+		var parsed := LoadoutVersion.parse(version)
+		if release.get("prerelease", false) and parsed != null and not parsed.is_prerelease():
+			continue
+		versions.append(version)
 	var best := LoadoutVersion.max_satisfying(versions, version_range)
 	if best == "":
 		var error := "The source has no version." if versions.is_empty() else "No version matches range %s." % version_range

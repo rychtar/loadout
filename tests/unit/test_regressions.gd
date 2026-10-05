@@ -143,6 +143,60 @@ func _gh_release(tag: String, extra: Dictionary = {}) -> Dictionary:
 	return r
 
 
+func test_github_prerelease_flag_is_not_offered_as_latest() -> void:
+	var http := FakeHttp.new()
+	var source := GithubSource.new("owner/mono", "mono", http)
+	http.respond_json(RELEASES_URL, [_gh_release("v2.0.0", { "prerelease": true }), _gh_release("v1.0.0")])
+	var listed := await source.list_releases()
+	source.releases.assign(listed["releases"])
+	var latest := await source.get_latest_version("*")
+	check_eq(latest["version"], "1.0.0", "a release GitHub flags as pre-release (tag v2.0.0) is not the default latest")
+
+
+func test_github_date_tag_is_not_a_version() -> void:
+	var http := FakeHttp.new()
+	var source := GithubSource.new("owner/mono", "mono", http)
+	http.respond_json(RELEASES_URL, [_gh_release("nightly-20260105"), _gh_release("v1.4.0")])
+	var listed := await source.list_releases()
+	source.releases.assign(listed["releases"])
+	var latest := await source.get_latest_version("*")
+	check_eq(latest["version"], "1.4.0", "build/date tags (nightly-20260105 -> 20260105.0.0) do not outrank real versions")
+
+
+func test_github_monorepo_entries_share_cache_but_pick_different_assets() -> void:
+	var http := FakeHttp.new()
+	http.respond_json(RELEASES_URL, [_gh_release("v1.0.0", { "assets": [
+		{ "name": "alpha-1.0.0.zip", "browser_download_url": "https://dl/alpha.zip" },
+		{ "name": "beta-1.0.0.zip", "browser_download_url": "https://dl/beta.zip" }] })])
+	var a := GithubSource.new("owner/mono", "alpha", http)
+	var b := GithubSource.new("owner/mono", "beta", http)
+	check_eq(a.cache_key() == b.cache_key(), false, "two plugins of one repo with different folders need different cache keys (both are '%s')" % a.cache_key())
+
+
+func test_github_release_without_any_package_url() -> void:
+	var http := FakeHttp.new()
+	var source := GithubSource.new("owner/mono", "mono", http)
+	http.respond_json(RELEASES_URL, [_gh_release("v1.0.0", { "zipball_url": null })])
+	var listed := await source.list_releases()
+	source.releases.assign(listed["releases"])
+	var dest := temp_dir("probe_nourl").path_join("d")
+	var fetched := await source.fetch("1.0.0", dest)
+	check(not fetched["ok"] and fetched["error"].contains("no downloadable package"), "no package url gives a clear message, got: %s" % fetched["error"])
+
+
+# --- store source ---------------------------------------------------------------------------
+
+func test_store_prerelease_flag_respected() -> void:
+	var http := FakeHttp.new()
+	var source := StoreSource.new("pub/slug", "slug", http, "4.7")
+	http.respond_json("https://store.godotengine.org/api/v1/releases/pub/slug/?compatibility=4.7", [
+		{ "id": 2, "version": "2.0.0", "stable": false }, { "id": 1, "version": "1.0.0", "stable": true }])
+	var listed := await source.list_releases()
+	source.releases.assign(listed["releases"])
+	var latest := await source.get_latest_version("*")
+	check_eq(latest["version"], "1.0.0", "an unstable store release (stable=false) is not the default latest")
+
+
 # --- zip ------------------------------------------------------------------------------------
 
 

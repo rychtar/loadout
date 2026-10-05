@@ -171,7 +171,7 @@ func test_only_https() -> void:
 func test_describe_and_cache_key() -> void:
 	_setup()
 	check_eq(source.describe(), "GitHub · owner/fake-a", "describe")
-	check_eq(source.cache_key(), "github:owner/fake-a", "cache key")
+	check_eq(source.cache_key(), "github:owner/fake-a#fake_a", "cache key includes the plugin folder")
 	check(source.is_remote(), "remote")
 
 

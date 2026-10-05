@@ -13,6 +13,9 @@ const PER_PAGE := 50
 ## The version is the end of the tag, after the start or a separator (so "godot4-1.2.3" is 1.2.3, not 4.0.0-1.2.3).
 const _TAG_VERSION_PATTERN := "(?:^|[-_/\\s])[vV]?(\\d+(?:\\.\\d+){0,2}(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?)$"
 
+## A tag that is a single big number ("nightly-20260105", "build-2024") is a date or build number.
+const MAX_BARE_MAJOR := 1000
+
 static var _tag_regex: RegEx
 
 var repo: String
@@ -37,8 +40,9 @@ func is_remote() -> bool:
 	return true
 
 
+## The chosen package depends on the plugin folder, so plugins of one repo do not share an entry.
 func cache_key() -> String:
-	return "github:%s" % repo
+	return "github:%s#%s" % [repo, folder]
 
 
 func list_releases(etag: String = "") -> Dictionary:
@@ -70,7 +74,10 @@ func fetch(version: String, dest_dir: String) -> Dictionary:
 	var release := get_release(version)
 	if release.is_empty():
 		return fetch_error("Release %s of %s is unknown, check for updates." % [version, repo])
-	var response: Dictionary = await _download(_http, str(release.get("download_url", "")))
+	var url := str(release.get("download_url", ""))
+	if url == "":
+		return fetch_error("Release %s of %s has no downloadable package." % [version, repo])
+	var response: Dictionary = await _download(_http, url)
 	return _save_and_extract(response["body"], folder, dest_dir) if response["ok"] else response
 
 
@@ -82,7 +89,7 @@ func _parse_release(item: Dictionary) -> Dictionary:
 		_tag_regex = RegEx.create_from_string(_TAG_VERSION_PATTERN)
 	var found := _tag_regex.search(tag)
 	var version := LoadoutVersion.parse(found.get_string(1)) if found != null else null
-	if version == null:
+	if version == null or (version.precision == 1 and version.major >= MAX_BARE_MAJOR):
 		return {}
 	return {
 		"version": str(version),
@@ -102,10 +109,15 @@ func _package_url(item: Dictionary) -> String:
 			zips.append(asset)
 	for asset in zips:
 		if str(asset["name"]).to_lower().contains(folder.to_lower()):
-			return str(asset.get("browser_download_url", ""))
+			return _text(asset.get("browser_download_url"))
 	if zips.size() == 1:
-		return str(zips[0].get("browser_download_url", ""))
-	return str(item.get("zipball_url", ""))
+		return _text(zips[0].get("browser_download_url"))
+	return _text(item.get("zipball_url"))
+
+
+## A JSON value as text, null becomes "".
+static func _text(value: Variant) -> String:
+	return "" if value == null else str(value)
 
 
 func _api_headers() -> PackedStringArray:
