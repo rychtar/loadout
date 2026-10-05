@@ -389,3 +389,20 @@ func test_manager_does_not_announce_addon_installed_while_busy() -> void:
 	manager.busy = false
 	var later: Array = manager.detect_new_addons()
 	check_eq(later.size(), 1, "announced once the action is over (the plugin was added by the user, not by Loadout)")
+
+
+func test_old_backups_are_pruned() -> void:
+	var env := _install_env("prune")
+	var installer: Installer = env["installer"]
+	var entry: Registry.Entry = env["entry"]
+	var source: FakeSource = env["source"]
+	var first: Dictionary = await installer.install(entry, source, "1.0.0")
+	var lock := Lockfile.new()
+	lock.set_installed("fake_a", "1.0.0", first["hash"], "2026-10-01")
+	var last := ""
+	for i in Installer.MAX_BACKUPS + 4:
+		var again: Dictionary = await installer.install(entry, source, "1.0.0", lock.get_entry("fake_a"), true)
+		last = again["backup_path"]
+	var kept := DirAccess.get_directories_at(env["root"].path_join("backup/fake_a"))
+	check_eq(kept.size(), Installer.MAX_BACKUPS, "only the newest backups are kept")
+	check(DirAccess.dir_exists_absolute(last), "the backup just made survives")

@@ -19,6 +19,8 @@ const CONFIRM_PINNED := "pinned"
 const CONFIRM_UNMANAGED := "unmanaged"
 ## First install of a package that keeps the plugin in another folder than the registry entry.
 const CONFIRM_FOLDER := "folder"
+## Backups kept per plugin (the newest ones); older folders are deleted when a new backup is made.
+const MAX_BACKUPS := 10
 
 signal plugin_installed(id: String, version: String)
 signal plugin_updated(id: String, from_version: String, to_version: String)
@@ -350,7 +352,31 @@ func _copy_fresh(src: String, dst: String) -> Error:
 	var err := Fs.remove_dir(dst)
 	if err != OK:
 		return err
-	return Fs.copy_dir(src, dst)
+	err = Fs.copy_dir(src, dst)
+	if err == OK:
+		_prune_backups(dst.get_base_dir(), dst)
+	return err
+
+
+## Deletes the oldest backup folders of a plugin beyond MAX_BACKUPS. keep (the backup just made)
+## is never deleted.
+func _prune_backups(plugin_backups: String, keep: String) -> void:
+	var folders: Array[String] = []
+	folders.assign(DirAccess.get_directories_at(plugin_backups))
+	if folders.size() <= MAX_BACKUPS:
+		return
+	# Oldest first; folders made within one second compare by name ("1.0.0-2" before "1.0.0-10").
+	folders.sort_custom(func(a: String, b: String) -> bool:
+		var time_a := FileAccess.get_modified_time(plugin_backups.path_join(a))
+		var time_b := FileAccess.get_modified_time(plugin_backups.path_join(b))
+		return a.naturalnocasecmp_to(b) < 0 if time_a == time_b else time_a < time_b)
+	var excess := folders.size() - MAX_BACKUPS
+	for folder in folders:
+		if excess <= 0:
+			break
+		var path := plugin_backups.path_join(folder)
+		if path != keep and Fs.remove_dir(path) == OK:
+			excess -= 1
 
 
 func _new_result(entry: LoadoutRegistry.Entry, version: String) -> Dictionary:
