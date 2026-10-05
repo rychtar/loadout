@@ -6,6 +6,8 @@ extends LoadoutSource
 ## It only offers the version currently in its plugin.cfg.
 
 var path: String
+## Version to report when the folder's plugin.cfg has none (restoring a backup of such a plugin).
+var version_override := ""
 
 
 func _init(plugin_path: String) -> void:
@@ -61,7 +63,8 @@ func _no_version_error() -> String:
 
 
 func _current_version() -> String:
-	return str(_read_cfg().get_value("plugin", "version", ""))
+	var version := str(_read_cfg().get_value("plugin", "version", ""))
+	return version if version != "" else version_override
 
 
 func _read_cfg() -> ConfigFile:

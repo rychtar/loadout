@@ -8,6 +8,7 @@ extends VBoxContainer
 const RegistryDialog := preload("registry_dialog.gd")
 const VersionDialog := preload("version_dialog.gd")
 const InstallDialog := preload("install_dialog.gd")
+const BackupDialog := preload("backup_dialog.gd")
 const Status := LoadoutManager.Status
 ## Characters of release notes shown in the update confirmation.
 const NOTES_PREVIEW := 600
@@ -85,6 +86,7 @@ var _alert: AcceptDialog
 var _registry_dialog: RegistryDialog
 var _version_dialog: VersionDialog
 var _install_dialog: InstallDialog
+var _backup_dialog: BackupDialog
 var _export_dialog: EditorFileDialog
 var _import_dialog: EditorFileDialog
 var _on_confirm: Callable
@@ -104,7 +106,7 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
-	for dialog: Window in [_confirm, _alert, _registry_dialog, _version_dialog, _install_dialog, _export_dialog, _import_dialog]:
+	for dialog: Window in [_confirm, _alert, _registry_dialog, _version_dialog, _install_dialog, _backup_dialog, _export_dialog, _import_dialog]:
 		if is_instance_valid(dialog):
 			dialog.queue_free()
 
@@ -257,6 +259,10 @@ func _build() -> void:
 	_version_dialog.version_chosen.connect(func(id: String, version: String, pin: bool) -> void:
 		_run(func() -> Dictionary: return await manager.install(id, false, version, pin)))
 	base.add_child(_version_dialog)
+	_backup_dialog = BackupDialog.new()
+	_backup_dialog.backup_chosen.connect(func(id: String, path: String, pin: bool) -> void:
+		_run(func() -> Dictionary: return await manager.restore_backup(id, path, pin)))
+	base.add_child(_backup_dialog)
 	_registry_dialog = RegistryDialog.new()
 	_registry_dialog.store_search = store_search
 	_registry_dialog.entry_submitted.connect(func(data: Dictionary, take_over: bool) -> void:
@@ -475,6 +481,10 @@ func _add_actions(state: LoadoutManager.PluginState) -> void:
 		var versions := manager.available_versions(id)
 		if versions.size() > 1:
 			_action("Install version…", func() -> void: _version_dialog.open_for(state, versions))
+	if state.entry != null and state.entry.folder != LoadoutManager.SELF_FOLDER and state.status != Status.ORPHAN:
+		var backups := manager.available_backups(id)
+		if not backups.is_empty():
+			_action("Restore backup…", func() -> void: _backup_dialog.open_for(state, backups))
 	if state.entry != null:
 		_action("Edit…", func() -> void: _registry_dialog.open_edit(state.entry, state.display_name))
 		_action("Remove from registry…", func() -> void:

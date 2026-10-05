@@ -166,6 +166,25 @@ func self_update(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: S
 	return result
 
 
+## Backups of the plugin, newest first: [{ "path", "name" (folder name), "version" (from its
+## plugin.cfg, "" when unknown), "modified" (unix time) }].
+func list_backups(entry: LoadoutRegistry.Entry) -> Array[Dictionary]:
+	var list: Array[Dictionary] = []
+	var root := backup_root.path_join(entry.id)
+	for name in DirAccess.get_directories_at(root):
+		var path := root.path_join(name)
+		if not Fs.has_files(path):
+			continue
+		var cfg := ConfigFile.new()
+		var version := ""
+		if cfg.load(path.path_join("plugin.cfg")) == OK:
+			version = str(cfg.get_value("plugin", "version", ""))
+		list.append({ "path": path, "name": name, "version": version, "modified": FileAccess.get_modified_time(path) })
+	list.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return a["name"].naturalnocasecmp_to(b["name"]) > 0 if a["modified"] == b["modified"] else a["modified"] > b["modified"])
+	return list
+
+
 ## Disables and removes the plugin folder (a backup is kept).
 ## Returns { "ok", "error", "id", "backup_path" }.
 func uninstall(entry: LoadoutRegistry.Entry) -> Dictionary:

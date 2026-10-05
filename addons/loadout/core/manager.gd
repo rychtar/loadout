@@ -248,6 +248,21 @@ func available_versions(id: String) -> Array[Dictionary]:
 	return list
 
 
+## Backups of the plugin's earlier files, newest first (see LoadoutInstaller.list_backups()).
+func available_backups(id: String) -> Array[Dictionary]:
+	var state := get_state(id)
+	if state == null or state.entry == null:
+		return []
+	return installer.list_backups(state.entry)
+
+
+## Puts one of the plugin's backups back in the project (the current files are backed up first)
+## and pins that version unless pin is false. Works for a removed plugin too.
+## Returns the installer result.
+func restore_backup(id: String, backup_path: String, pin: bool = true) -> Dictionary:
+	return await _exclusive(id, func(state: PluginState) -> Dictionary: return await _restore_backup(state, backup_path, pin))
+
+
 ## Installs or updates the plugin to its target version, or to version when given (an explicit
 ## choice: a pinned plugin may switch, and pin decides whether it stays pinned afterwards).
 ## Without force a modified, pinned or unmanaged folder is left alone and the result has
@@ -574,6 +589,32 @@ func _older_version(id: String, failed: String) -> String:
 		if release["in_range"] and release["offered"] and number != null and number.compare(failed_version) < 0:
 			return release["version"]
 	return ""
+
+
+func _restore_backup(state: PluginState, backup_path: String, pin: bool) -> Dictionary:
+	if state.entry.folder == SELF_FOLDER:
+		return _error_result(state.id, "Loadout cannot restore itself this way. Copy the backup folder over addons/loadout by hand.")
+	var backup := {}
+	for item in installer.list_backups(state.entry):
+		if item["path"] == backup_path:
+			backup = item
+	if backup.is_empty():
+		return _error_result(state.id, "That backup no longer exists.")
+	var version: String = backup["version"] if backup["version"] != "" else "0.0.0"
+	if LoadoutVersion.parse(version) == null:
+		return _error_result(state.id, "The backup has no valid version (%s) in its plugin.cfg." % version)
+	var source := LoadoutLocalSource.new(ProjectSettings.globalize_path(backup_path))
+	source.version_override = version
+	var result: Dictionary = await installer.install(state.entry, source, version, state.lock_entry, true)
+	if result["ok"]:
+		lockfile.set_installed(state.id, version, result["hash"], _today())
+		lockfile.set_pinned(state.id, pin)
+		lockfile.set_ignored(state.id, false)
+		_save_lock()
+		if result["restart_recommended"]:
+			restart_recommended.emit()
+	await refresh()
+	return result
 
 
 func _uninstall(state: PluginState) -> Dictionary:

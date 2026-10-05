@@ -123,6 +123,48 @@ func _fake_source(versions: Dictionary) -> FakeSource:
 	return source
 
 
+func test_restore_a_backup() -> void:
+	_setup("restore", [_local("fake_a", "1.0.0")])
+	_fake_source({ "1.0.0": "1.0.0", "1.1.0": "1.1.0" })
+	var manager := _manager("project")
+	await manager.refresh()
+	await manager.install("fake_a", false, "1.0.0")
+	await manager.install("fake_a", false, "1.1.0")
+	var backups := manager.available_backups("fake_a")
+	check_eq(backups.size(), 1, "the update left one backup")
+	check_eq(backups[0]["version"], "1.0.0", "it holds the old version")
+	var result: Dictionary = await manager.restore_backup("fake_a", backups[0]["path"])
+	check(result["ok"], "restored: %s" % result["error"])
+	var state := manager.get_state("fake_a")
+	check_eq(state.installed_version, "1.0.0", "old version is back")
+	check_eq(state.status, Manager.Status.PINNED, "pinned, otherwise the update is offered right back")
+	check_eq(manager.available_backups("fake_a").size(), 2, "the replaced 1.1.0 files are backed up too")
+
+
+func test_restore_a_backup_of_a_removed_plugin() -> void:
+	_setup("restore_removed", [_local("fake_a", "1.0.0")])
+	_fake_source({ "1.0.0": "1.0.0" })
+	var manager := _manager("project")
+	await manager.refresh()
+	await manager.install("fake_a")
+	await manager.uninstall("fake_a")
+	check_eq(manager.get_state("fake_a").status, Manager.Status.IGNORED, "removed and ignored here")
+	var backups := manager.available_backups("fake_a")
+	check_eq(backups.size(), 1, "uninstall left a backup")
+	var result: Dictionary = await manager.restore_backup("fake_a", backups[0]["path"], false)
+	check(result["ok"], "restored: %s" % result["error"])
+	check_eq(manager.get_state("fake_a").status, Manager.Status.OK, "installed and no longer ignored")
+
+
+func test_restore_refuses_a_path_that_is_not_a_backup() -> void:
+	_setup("restore_bad", [_local("fake_a", "1.0.0")])
+	_fake_source({ "1.0.0": "1.0.0" })
+	var manager := _manager("project")
+	await manager.refresh()
+	var result: Dictionary = await manager.restore_backup("fake_a", ProjectSettings.globalize_path(FIXTURES.path_join("1.1.0")))
+	check(not result["ok"], "only backups the installer made can be restored")
+
+
 func test_a_version_that_does_not_start_suggests_an_older_one() -> void:
 	_setup("fallback", [_local("fake_a", "1.0.0")])
 	_fake_source({ "1.0.0": "1.0.0", "1.1.0": "1.1.0" })
