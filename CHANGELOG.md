@@ -16,6 +16,11 @@
 - With two editors open, adding, editing, removing or importing a registry entry no longer undoes what the other editor saved: every change starts from the registry file on disk.
 - "Overwrite anyway?" after choosing a version in "Install version…" installs that version (and keeps the pin choice) instead of the newest one.
 - A local plugin whose plugin.cfg version is not valid (e.g. `1.2.3.4`) says so instead of "does not match range *". The version dialog no longer marks a release flagged as pre-release as the newest.
+- The newest backups per plugin (10) are kept; older ones are deleted when a new backup is made.
+- A release zip that also contains a copy of the plugin in a demo or test project (`Demo/addons/foo`) installs the plugin at the shallowest path, not the first one found.
+- A package download may take up to 10 minutes (listing releases still 1 minute) instead of failing a large package on a slow connection after one minute.
+- The dock says "Reading the registry…" until the first check is done instead of "The registry is empty".
+- `tools/install_loadout` writes `project.godot` through a temporary file.
 - Stricter validation: GitHub repos `owner/..` and `owner/name.git`, Windows device names and trailing dots in folder names, version numbers that overflow, numeric prerelease identifiers with leading zeros, zips that unpack to more than 512 MB or 20000 files, and a release without a download link now gives a clear message.
 
 ## 0.1.1
