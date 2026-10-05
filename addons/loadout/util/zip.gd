@@ -3,7 +3,11 @@ extends RefCounted
 
 ## Extracts one plugin folder (the one with plugin.cfg) from a downloaded zip.
 ## Handles release assets (addons/<folder>/...), GitHub source zips (<repo>-<sha>/addons/<folder>/...)
-## and zips of the plugin folder itself. Entries escaping the target (../) are refused.
+## and zips of the plugin folder itself. Entries escaping the target (../) are refused, and so is
+## a zip that unpacks to more than MAX_UNPACKED_BYTES (zip bomb).
+
+const MAX_UNPACKED_BYTES := 512 * 1024 * 1024
+const MAX_FILES := 20000
 
 
 ## Returns { "ok": bool, "error": String, "source_folder": String }. dest_dir receives the plugin
@@ -25,6 +29,10 @@ static func extract_plugin(zip_path: String, folder: String, dest_dir: String) -
 				reader.close()
 				return { "ok": false, "error": "The zip contains an unsafe path: %s" % path }
 			wanted.append(path)
+	if wanted.size() > MAX_FILES:
+		reader.close()
+		return { "ok": false, "error": "The package has too many files (%d)." % wanted.size() }
+	var unpacked := 0
 	var err := DirAccess.make_dir_recursive_absolute(dest_dir)
 	for path in wanted:
 		if err != OK:
@@ -36,7 +44,13 @@ static func extract_plugin(zip_path: String, folder: String, dest_dir: String) -
 			if file == null:
 				err = FileAccess.get_open_error()
 			else:
-				file.store_buffer(reader.read_file(path))
+				var content := reader.read_file(path)
+				unpacked += content.size()
+				if unpacked > MAX_UNPACKED_BYTES:
+					file.close()
+					reader.close()
+					return { "ok": false, "error": "The package unpacks to more than %d MB, refusing it." % (MAX_UNPACKED_BYTES / 1048576) }
+				file.store_buffer(content)
 				file.close()
 	reader.close()
 	if err != OK:

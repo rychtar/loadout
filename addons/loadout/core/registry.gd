@@ -20,6 +20,9 @@ const _STORE_ASSET_PATTERN := "^[a-z0-9][a-z0-9_-]*/[a-z0-9][a-z0-9_.-]*$"
 const _NAME_PATTERN := "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
 const _REPO_PATTERN := "^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$"
 const _GITHUB_URL_PREFIX := "https://github.com/"
+## Names Windows reserves for devices (with any extension), a folder called so cannot be created there.
+const _RESERVED_NAMES: PackedStringArray = ["con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5",
+		"com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"]
 
 
 class Entry:
@@ -244,13 +247,15 @@ static func _normalize_repo(repo: String) -> String:
 		text = text.trim_prefix(_GITHUB_URL_PREFIX).trim_suffix("/").trim_suffix(".git")
 	elif text.contains("://"):
 		return ""
-	if not _matches(_REPO_PATTERN, text):
+	text = text.trim_suffix(".git")
+	if not _matches(_REPO_PATTERN, text) or text.get_file().begins_with("."):
 		return ""
 	return text
 
 
 static func _is_valid_name(text: String) -> bool:
-	return _matches(_NAME_PATTERN, text) and not text.contains("..")
+	return _matches(_NAME_PATTERN, text) and not text.contains("..") and not text.ends_with(".") \
+			and not _RESERVED_NAMES.has(text.get_slice(".", 0).to_lower())
 
 
 static func _matches(pattern: String, text: String) -> bool:

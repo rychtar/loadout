@@ -85,6 +85,49 @@ func test_empty_lock_file_is_not_a_permanent_block() -> void:
 	check(lock["ok"], "0-byte lock treated as empty, got error: %s" % lock["error"])
 
 
+# --- registry -------------------------------------------------------------------------------
+
+func test_registry_rejects_dot_dot_repo() -> void:
+	var parsed := Registry.parse_entry({ "id": "x", "source": { "type": "github", "repo": "owner/.." } })
+	check(not parsed["ok"], "owner/.. is not a valid repository")
+
+
+func test_registry_trims_dot_git_suffix_without_url() -> void:
+	var parsed := Registry.parse_entry({ "id": "x", "source": { "type": "github", "repo": "owner/name.git" } })
+	check(parsed["ok"] and parsed["entry"].source["repo"] == "owner/name", "owner/name.git normalized, got %s" % [parsed["entry"].source if parsed["ok"] else parsed["error"]])
+
+
+
+
+func test_registry_windows_reserved_folder() -> void:
+	var parsed := Registry.parse_entry({ "id": "x", "folder": "con", "source": { "type": "github", "repo": "a/b" } })
+	check(not parsed["ok"], "folder 'con' is reserved on Windows")
+
+
+func test_registry_folder_trailing_dot() -> void:
+	var parsed := Registry.parse_entry({ "id": "x", "folder": "foo.", "source": { "type": "github", "repo": "a/b" } })
+	check(not parsed["ok"], "folder with a trailing dot is not portable (Windows strips it)")
+
+
+func test_registry_reserved_folder_with_extension() -> void:
+	check(not Registry.parse_entry({ "id": "x", "folder": "NUL.txt", "source": { "type": "github", "repo": "a/b" } })["ok"], "reserved device name with extension")
+	check(Registry.parse_entry({ "id": "x", "folder": "console", "source": { "type": "github", "repo": "a/b" } })["ok"], "names that only start like one are fine")
+
+
+# --- version --------------------------------------------------------------------------------
+
+func test_version_overflowing_numbers() -> void:
+	var v := LoadoutVersion.parse("1.99999999999999999999.0")
+	check(v == null, "a number that would overflow an int is not a version")
+
+
+
+
+func test_leading_zero_numeric_prerelease() -> void:
+	var a := LoadoutVersion.parse("1.0.0-01")
+	check(a == null, "semver forbids leading zeros in numeric prerelease identifiers")
+
+
 # --- update checker -------------------------------------------------------------------------
 
 func _checker(now: Callable, name: String) -> Checker:
@@ -201,6 +244,26 @@ func test_store_prerelease_flag_respected() -> void:
 
 
 
+
+
+func test_zip_bomb_is_limited() -> void:
+	var root := temp_dir("probe_zipbomb")
+	var zip := root.path_join("a.zip")
+	var packer := ZIPPacker.new()
+	packer.open(zip)
+	packer.start_file("p/plugin.cfg")
+	packer.write_file("x".to_utf8_buffer())
+	packer.close_file()
+	var chunk := PackedByteArray()
+	chunk.resize(64 * 1024 * 1024)
+	for i in 9:  # 576 MB of zeros, a few hundred KB zipped
+		packer.start_file("p/blob%d.bin" % i)
+		packer.write_file(chunk)
+		packer.close_file()
+	packer.close()
+	var result := Zip_.extract_plugin(zip, "p", root.path_join("out"))
+	check(not result["ok"] and result["error"].contains("more than"), "an oversized package is refused: %s" % result["error"])
+	Fs_.remove_dir(root)
 
 
 # --- installer: backups ---------------------------------------------------------------------

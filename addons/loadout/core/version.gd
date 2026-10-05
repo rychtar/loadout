@@ -10,6 +10,9 @@ extends RefCounted
 const _VERSION_PATTERN := "^[vV]?(0|[1-9]\\d*)(?:\\.(0|[1-9]\\d*))?(?:\\.(0|[1-9]\\d*))?" \
 		+ "(?:-([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
 
+## Longer numbers would overflow an int.
+const MAX_DIGITS := 9
+
 static var _regex: RegEx
 
 var major: int = 0
@@ -27,6 +30,9 @@ static func parse(text: String) -> LoadoutVersion:
 	var found := _regex.search(text.strip_edges())
 	if found == null:
 		return null
+	for group in 3:
+		if found.get_string(group + 1).length() > MAX_DIGITS:
+			return null
 	var version := LoadoutVersion.new()
 	version.major = found.get_string(1).to_int()
 	version.precision = 1
@@ -38,6 +44,10 @@ static func parse(text: String) -> LoadoutVersion:
 		version.precision = 3
 	if found.get_string(4) != "":
 		version.prerelease = found.get_string(4).split(".")
+		for identifier in version.prerelease:
+			# Numeric identifiers have no leading zeros (semver 2.0.0, rule 9).
+			if identifier.length() > 1 and identifier.begins_with("0") and identifier.is_valid_int():
+				return null
 	return version
 
 
