@@ -204,7 +204,7 @@ func use_package_folders(folders: Dictionary) -> Dictionary:
 
 func _install_all(ids: PackedStringArray) -> Dictionary:
 	var summary := { "installed": PackedStringArray(), "failed": {}, "folders": {}, "restart_recommended": false }
-	for id in ids:
+	for id in _self_last(ids):
 		var result := await install(id)
 		if result["ok"]:
 			summary["installed"].append(id)
@@ -216,6 +216,21 @@ func _install_all(ids: PackedStringArray) -> Dictionary:
 			if result.get("fallback_version", "") != "":
 				summary["failed"][id] += " An older version (%s) may work: select the plugin and use Install version…." % result["fallback_version"]
 	return summary
+
+
+## ids with Loadout's own entry moved to the end: its update restarts the editor right away, so
+## every other plugin must be done by then.
+func _self_last(ids: PackedStringArray) -> PackedStringArray:
+	var ordered := PackedStringArray()
+	var own := PackedStringArray()
+	for id in ids:
+		var state := get_state(id)
+		if state != null and state.entry != null and state.entry.folder == SELF_FOLDER:
+			own.append(id)
+		else:
+			ordered.append(id)
+	ordered.append_array(own)
+	return ordered
 
 
 ## Updates every plugin from update_ids() (the dock asks for confirmation first). Returns the
