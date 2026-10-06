@@ -48,6 +48,12 @@ plugin list to resize it, double-click it to fit the column to its text.
   local folder with `plugin.cfg`. Allowed versions: `*` (newest), `^1.2.0` (minor and patch
   updates) or `~1.2.0` (patch updates only). Plugins that appear in `addons/` by other means are
   offered for the registry too.
+- **Starter plugins…** (in **⋮**): the install dialog with two lists. On the left are the plugins
+  this project lacks from your registry and the **Starter pack** (tagged), a short list of plugins
+  that suit most projects. Move what you want to the right (button or double-click), **Install
+  selected** adds it to your registry where needed and installs it. **Details…** on a card loads what
+  the plugin is for and the release notes of a version. The checkbox **Hide the starter pack from now
+  on** turns it off; it comes back from the same menu entry. An empty registry shows the dialog once, on its own.
 - **New project**: the missing plugins are listed with a checkbox each, unchecked ones can be
   ignored in this project. **Install missing…** opens the same list later.
 - **Update**: a plugin with a newer version shows **Update** and its release notes. **Update all…**
