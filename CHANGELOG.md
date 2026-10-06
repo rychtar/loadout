@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Starter plugins…** (⋮ menu): a short list of plugins most projects can use (GDScript Templates, the Godot Git client Godit, Script-IDE). It opens the install dialog with the starter pack next to the plugins your registry says this project lacks. A chosen starter is added to your registry and installed in one step. A new Loadout with an empty registry offers the list once. The list is `addons/loadout/data/starter_pack.json`.
+- **Starter plugins…** (⋮ menu): a short list of plugins most projects can use (GDScript Templates, the Godot Git client Godit, Script-IDE). It opens the install dialog with the starter pack next to the plugins your registry says this project lacks. A chosen starter is added to your registry and installed in one step. The dialog opens by itself the first time, and again whenever a Loadout update adds a starter you were never offered (unless you hid the pack). The list is `addons/loadout/data/starter_pack.json`.
 - The checkbox **Hide the starter pack from now on** at the bottom of the install dialog switches the starter pack off for good (Editor Settings → Loadout → Show Starter Pack, or ⋮ → Starter plugins… to bring it back). Starters you already moved to the install list stay and are installed.
 - **Details…** on every card of the install dialog: what the plugin is for (from the Asset Store, GitHub, the Asset Library or its `plugin.cfg`) and the release notes of a version picked from a list. The lists themselves make no requests, the details are fetched when you click. A starter with no Asset Store release for your Godot version is skipped when you add it.
 

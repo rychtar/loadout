@@ -53,7 +53,7 @@ plugin list to resize it, double-click it to fit the column to its text.
   that suit most projects. Move what you want to the right (button or double-click), **Install
   selected** adds it to your registry where needed and installs it. **Details…** on a card loads what
   the plugin is for and the release notes of a version. The checkbox **Hide the starter pack from now
-  on** turns it off; it comes back from the same menu entry. An empty registry shows the dialog once, on its own.
+  on** turns it off; it comes back from the same menu entry. The dialog opens by itself the first time and again when an update adds a new starter.
 - **New project**: the missing plugins are listed with a checkbox each, unchecked ones can be
   ignored in this project. **Install missing…** opens the same list later.
 - **Update**: a plugin with a newer version shows **Update** and its release notes. **Update all…**
