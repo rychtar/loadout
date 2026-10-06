@@ -14,6 +14,7 @@ const SEARCH_RESULTS := 20
 var asset_id: String
 var folder: String
 var _http: LoadoutHttp
+var _info: Dictionary = {}
 
 
 func _init(id: String, plugin_folder: String, http: LoadoutHttp) -> void:
@@ -69,6 +70,19 @@ func list_releases(_etag: String = "") -> Dictionary:
 		"title": str(asset.get("title", "")),
 		"godot_version": str(asset.get("godot_version", "")),
 	}] }
+
+
+func get_info() -> Dictionary:
+	if not _info.is_empty():
+		return _info
+	var response: Dictionary = await _http.get_json("%s/asset/%s" % [API, asset_id], default_headers())
+	if not response["ok"]:
+		return info_error(response["error"])
+	if response["code"] != 200 or typeof(response["data"]) != TYPE_DICTIONARY:
+		return info_error("The Asset Library answered with code %d." % response["code"])
+	var data: Dictionary = response["data"]
+	_info = info_result(str(data.get("description", "")), str(data.get("author", "")), str(data.get("cost", "")), ASSET_PAGE % asset_id)
+	return _info
 
 
 func fetch(version: String, dest_dir: String) -> Dictionary:

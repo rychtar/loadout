@@ -59,3 +59,10 @@ func test_trim_notes_cuts_long_text_and_accepts_null() -> void:
 	check_eq(LocalSource.trim_notes("short"), "short", "short text is kept")
 	check_eq(LocalSource.trim_notes("abcdef", 3), "abc…", "long text is cut")
 
+
+
+func test_info_reads_description_and_author_from_plugin_cfg() -> void:
+	var info: Dictionary = await _source(FIXTURE).get_info()
+	check(info["ok"], "ok")
+	check_eq(info["summary"], "Test plugin for Loadout (fixture).", "description")
+	check_eq(info["author"], "Loadout", "author")

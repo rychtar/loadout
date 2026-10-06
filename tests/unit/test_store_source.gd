@@ -102,3 +102,43 @@ func test_search() -> void:
 	check_eq(result["results"][0]["asset"], "rumys/fake-a", "publisher/slug")
 	check_eq(result["results"][0]["title"], "Fake A", "name")
 	check_eq(result["results"][0]["author"], "Rumys", "publisher name")
+
+
+func test_info_comes_from_the_asset_page_and_is_asked_once() -> void:
+	_setup()
+	var url := API + "/assets/rumys/fake-a/"
+	http.respond_json(url, { "name": "Fake A", "description": "  Does a thing.  ", "license_type": "MIT", "publisher": { "name": "Rumys", "slug": "rumys" } })
+	var info: Dictionary = await source.get_info()
+	check(info["ok"], "ok: %s" % info["error"])
+	check_eq([info["summary"], info["author"], info["license"]], ["Does a thing.", "Rumys", "MIT"], "info")
+	check_eq(info["url"], "https://store.godotengine.org/asset/rumys/fake-a/", "page")
+	await source.get_info()
+	check_eq(http.requests.size(), 1, "the second call uses the answer it already has")
+
+
+func test_info_survives_nulls_and_errors() -> void:
+	_setup()
+	var url := API + "/assets/rumys/fake-a/"
+	http.respond_json(url, { "description": null, "license_type": null, "publisher": null })
+	var info: Dictionary = await source.get_info()
+	check(info["ok"] and info["summary"] == "" and info["license"] == "", "nulls become empty strings")
+	_setup()
+	http.responses[url] = { "code": 404, "body": "{}" }
+	var failed: Dictionary = await source.get_info()
+	check(not failed["ok"] and failed["error"] != "", "a missing asset is an error, not a crash")
+
+
+func test_bbcode_release_notes_become_plain_text() -> void:
+	var text := StoreSource.bbcode_to_text("1.1.1\n\nFixed\n\n[ul]\n\nUse [code]a/[/code] and [b]b/[/b]. See [url=https://example.com/x]the page[/url].\n[li]item[/li]\n[/ul]\n\n\n\nEnd [url]https://example.com[/url]")
+	check_eq(text, "1.1.1\n\nFixed\n\nUse a/ and b/. See the page (https://example.com/x).\n• item\n\nEnd https://example.com", "tags dropped, links and bullets kept")
+	check_eq(StoreSource.bbcode_to_text(null), "", "null is empty")
+
+
+func test_release_notes_fall_back_to_the_bbcode_changelog() -> void:
+	_setup()
+	var release := _release(12, "v1.1.0")
+	release["notes"] = ""
+	release["changes_bbcode"] = "[ul]Fixed [code]x[/code][/ul]"
+	http.respond_json(RELEASES_URL, [release])
+	var result: Dictionary = await source.list_releases()
+	check_eq(result["releases"][0]["notes"], "Fixed x", "notes read from changes_bbcode as plain text")

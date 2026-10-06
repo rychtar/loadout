@@ -203,3 +203,19 @@ func test_bad_token() -> void:
 	check(not result["ok"], "fails")
 	check(str(result["error"]).contains("token"), "explains: %s" % result["error"])
 	check(not str(result["error"]).contains(secret), "token never in messages")
+
+
+func test_info_comes_from_the_repository() -> void:
+	_setup()
+	http.respond_json("https://api.github.com/repos/owner/fake-a", { "description": "A fake plugin.", "owner": { "login": "owner" },
+			"license": { "spdx_id": "MIT" } })
+	var info: Dictionary = await source.get_info()
+	check(info["ok"], "ok: %s" % info["error"])
+	check_eq([info["summary"], info["author"], info["license"], info["url"]], ["A fake plugin.", "owner", "MIT", "https://github.com/owner/fake-a"], "info")
+
+
+func test_info_without_description_or_license() -> void:
+	_setup()
+	http.respond_json("https://api.github.com/repos/owner/fake-a", { "description": null, "license": { "spdx_id": "NOASSERTION" } })
+	var info: Dictionary = await source.get_info()
+	check(info["ok"] and info["summary"] == "" and info["license"] == "", "empty, not 'null' or NOASSERTION")
