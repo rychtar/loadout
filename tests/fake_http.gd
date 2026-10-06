@@ -3,7 +3,7 @@ extends LoadoutHttp
 
 ## url -> { "code": int, "headers": Dictionary, "body": PackedByteArray or String } or "error" text
 var responses: Dictionary[String, Variant] = {}
-## [{ "url": String, "headers": PackedStringArray }]
+## [{ "url": String, "headers": PackedStringArray, "timeout": float }]
 var requests: Array[Dictionary] = []
 
 
@@ -16,8 +16,8 @@ func respond_json(url: String, data: Variant, headers: Dictionary = {}, code: in
 
 
 ## Replaces the transport only, so redirect handling of LoadoutHttp.get_request() runs for real.
-func _request_once(url: String, headers: PackedStringArray) -> Dictionary:
-	requests.append({ "url": url, "headers": headers })
+func _request_once(url: String, headers: PackedStringArray, timeout_s: float) -> Dictionary:
+	requests.append({ "url": url, "headers": headers, "timeout": timeout_s })
 	var refused := check_url(url)
 	if refused != "":
 		return _error(refused)

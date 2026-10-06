@@ -36,6 +36,12 @@ func validate_plugin(_dir: String) -> Error:
 	return OK
 
 
+## Checks that every script under dir compiles, for code that is not loaded yet (a staged Loadout
+## update). Unlike validate_plugin() it also covers scripts the entry script does not preload.
+func validate_scripts(_dir: String) -> Error:
+	return OK
+
+
 ## set_plugin_enabled() only queues the project.godot save, this writes it now.
 func save_project_settings() -> Error:
 	return OK

@@ -3,7 +3,11 @@ extends RefCounted
 
 ## Extracts one plugin folder (the one with plugin.cfg) from a downloaded zip.
 ## Handles release assets (addons/<folder>/...), GitHub source zips (<repo>-<sha>/addons/<folder>/...)
-## and zips of the plugin folder itself. Entries escaping the target (../) are refused.
+## and zips of the plugin folder itself. Entries escaping the target (../) are refused, and so is
+## a zip that unpacks to more than MAX_UNPACKED_BYTES (zip bomb).
+
+const MAX_UNPACKED_BYTES := 512 * 1024 * 1024
+const MAX_FILES := 20000
 
 
 ## Returns { "ok": bool, "error": String, "source_folder": String }. dest_dir receives the plugin
@@ -18,18 +22,21 @@ static func extract_plugin(zip_path: String, folder: String, dest_dir: String) -
 		reader.close()
 		return { "ok": false, "error": prefix["error"] }
 	var root: String = prefix["prefix"]
+	var wanted: PackedStringArray = []
 	for path in files:
-		if not path.begins_with(root) or path.ends_with("/"):
-			continue
-		if not _is_safe(path.trim_prefix(root)):
-			reader.close()
-			return { "ok": false, "error": "The zip contains an unsafe path: %s" % path }
+		if path.begins_with(root) and not path.ends_with("/"):
+			if not _is_safe(path.trim_prefix(root)):
+				reader.close()
+				return { "ok": false, "error": "The zip contains an unsafe path: %s" % path }
+			wanted.append(path)
+	if wanted.size() > MAX_FILES:
+		reader.close()
+		return { "ok": false, "error": "The package has too many files (%d)." % wanted.size() }
+	var unpacked := 0
 	var err := DirAccess.make_dir_recursive_absolute(dest_dir)
-	for path in files:
+	for path in wanted:
 		if err != OK:
 			break
-		if not path.begins_with(root) or path.ends_with("/"):
-			continue
 		var target := dest_dir.path_join(path.trim_prefix(root))
 		err = DirAccess.make_dir_recursive_absolute(target.get_base_dir())
 		if err == OK:
@@ -37,7 +44,13 @@ static func extract_plugin(zip_path: String, folder: String, dest_dir: String) -
 			if file == null:
 				err = FileAccess.get_open_error()
 			else:
-				file.store_buffer(reader.read_file(path))
+				var content := reader.read_file(path)
+				unpacked += content.size()
+				if unpacked > MAX_UNPACKED_BYTES:
+					file.close()
+					reader.close()
+					return { "ok": false, "error": "The package unpacks to more than %d MB, refusing it." % (MAX_UNPACKED_BYTES / 1048576) }
+				file.store_buffer(content)
 				file.close()
 	reader.close()
 	if err != OK:
@@ -57,10 +70,10 @@ static func _plugin_prefix(files: PackedStringArray, folder: String) -> Dictiona
 	if candidates.size() == 1:
 		chosen = candidates[0]
 	else:
+		# A repo may carry copies of the plugin (demo or test projects): the shallowest one is the plugin.
 		for candidate in candidates:
-			if candidate.get_file() == folder:
+			if candidate.get_file() == folder and (chosen == "" or candidate.count("/") < chosen.count("/")):
 				chosen = candidate
-				break
 	if chosen == "" and not candidates.has(""):
 		return { "prefix": "", "error": "The package has several plugins (%s) and none is called %s." % [", ".join(candidates), folder] }
 	return { "prefix": chosen + "/" if chosen != "" else "", "error": "" }

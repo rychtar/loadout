@@ -63,11 +63,19 @@ static func install(loadout_dir: String, project_dir: String, force: bool = fals
 			result["error"] = "Copying to %s failed: %s" % [target, error_string(err)]
 			return result
 	if enabled["text"] != project_text:
-		var file := FileAccess.open(project_file, FileAccess.WRITE)
+		# Through a temporary file: a crash must not leave a half-written project.godot.
+		var tmp_file := project_file + ".loadout.tmp"
+		var file := FileAccess.open(tmp_file, FileAccess.WRITE)
 		if file == null:
 			result["error"] = "Cannot write project.godot: %s" % error_string(FileAccess.get_open_error())
 			return result
 		file.store_string(enabled["text"])
+		file.close()
+		var renamed := DirAccess.rename_absolute(tmp_file, project_file)
+		if renamed != OK:
+			DirAccess.remove_absolute(tmp_file)
+			result["error"] = "Cannot write project.godot: %s" % error_string(renamed)
+			return result
 	result["ok"] = true
 	return result
 

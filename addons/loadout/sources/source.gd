@@ -9,6 +9,8 @@ const Zip := preload("../util/zip.gd")
 const Fs := preload("../util/fs.gd")
 
 const USER_AGENT := "Loadout (Godot editor plugin)"
+## Release notes are cut to this many characters.
+const MAX_NOTES := 4000
 
 ## Remote sources list their releases with list_releases(); LoadoutUpdateChecker caches that list
 ## (once a day, ETag) and puts it into `releases`, which the other methods then use.
@@ -36,16 +38,27 @@ func cache_key() -> String:
 ## Lists available releases. etag of the previous answer allows a cheap "not modified" reply.
 ## Returns { "ok", "error", "not_modified": bool, "etag": String, "releases": Array[Dictionary] }.
 func list_releases(_etag: String = "") -> Dictionary:
-	return { "ok": false, "error": "The source cannot list versions.", "not_modified": false, "etag": "", "releases": [] }
+	return listing_error("The source cannot list versions.")
 
 
-## Highest known version within version_range.
+## Whether a release may be offered as the newest version. A release the source flags as a
+## pre-release is skipped unless its version number says so too (then the range decides).
+static func is_offered(release: Dictionary, include_prereleases: bool = false) -> bool:
+	if include_prereleases or not release.get("prerelease", false):
+		return true
+	var parsed := LoadoutVersion.parse(str(release.get("version", "")))
+	return parsed == null or parsed.is_prerelease()
+
+
+## Highest known version within version_range. A release the source flags as a pre-release is
+## skipped unless its version number says so too (then the range decides, see LoadoutVersion).
 ## Returns { "ok": bool, "error": String, "version": String }.
-func get_latest_version(version_range: String) -> Dictionary:
+func get_latest_version(version_range: String, include_prereleases: bool = false) -> Dictionary:
 	var versions: PackedStringArray = []
 	for release in releases:
-		versions.append(str(release.get("version", "")))
-	var best := LoadoutVersion.max_satisfying(versions, version_range)
+		if is_offered(release, include_prereleases):
+			versions.append(str(release.get("version", "")))
+	var best := LoadoutVersion.max_satisfying(versions, version_range, include_prereleases)
 	if best == "":
 		var error := "The source has no version." if versions.is_empty() else "No version matches range %s." % version_range
 		return { "ok": false, "error": error, "version": "" }
@@ -74,12 +87,53 @@ func get_plugin_name() -> String:
 ## Returns { "ok": bool, "error": String, "path": String, "package_folder": String (optional, the
 ## plugin's folder name inside the package), "warning": String (optional) } where path holds plugin.cfg.
 func fetch(_version: String, _dest_dir: String) -> Dictionary:
-	return { "ok": false, "error": "The source cannot download.", "path": "" }
+	return fetch_error("The source cannot download.")
+
+
+## A failed fetch() answer.
+static func fetch_error(error: String) -> Dictionary:
+	return { "ok": false, "error": error, "path": "" }
+
+
+## A failed search() answer.
+static func search_error(error: String) -> Dictionary:
+	return { "ok": false, "error": error, "results": [] }
+
+
+## A failed list_releases() answer.
+static func listing_error(error: String) -> Dictionary:
+	return { "ok": false, "error": error, "not_modified": false, "etag": "", "releases": [] }
+
+
+## JSON values of the wrong type must not crash the parsers (bool([]) and int({}) are errors).
+static func json_bool(value: Variant, fallback: bool) -> bool:
+	return value if typeof(value) == TYPE_BOOL else fallback
+
+
+static func json_int(value: Variant, fallback: int) -> int:
+	return int(value) if typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT else fallback
+
+
+## Release notes from a JSON value (null becomes ""), cut to limit characters.
+static func trim_notes(value: Variant, limit: int = MAX_NOTES) -> String:
+	var notes := "" if value == null else str(value)
+	return notes.left(limit) + "…" if notes.length() > limit else notes
 
 
 ## Headers every request to a remote source carries.
 static func default_headers() -> PackedStringArray:
 	return PackedStringArray(["User-Agent: %s" % USER_AGENT])
+
+
+## Shared by the remote sources: downloads url. Returns the fetch_error() on failure, otherwise
+## { "ok": true, "error": "", "path": "", "body": PackedByteArray }.
+func _download(http: LoadoutHttp, url: String) -> Dictionary:
+	var response: Dictionary = await http.get_request(url, default_headers(), LoadoutHttp.DOWNLOAD_TIMEOUT_S)
+	if not response["ok"]:
+		return fetch_error(response["error"])
+	if response["code"] != 200:
+		return fetch_error("Download of %s failed (code %d)." % [url.get_slice("?", 0), response["code"]])
+	return { "ok": true, "error": "", "path": "", "body": response["body"] }
 
 
 ## Shared by the remote sources: saves a downloaded zip, extracts the plugin folder into dest_dir and
@@ -89,18 +143,18 @@ func _save_and_extract(body: PackedByteArray, plugin_folder: String, dest_dir: S
 	DirAccess.make_dir_recursive_absolute(zip_path.get_base_dir())
 	var file := FileAccess.open(zip_path, FileAccess.WRITE)
 	if file == null:
-		return { "ok": false, "error": "Cannot save the zip: %s" % error_string(FileAccess.get_open_error()), "path": "" }
+		return fetch_error("Cannot save the zip: %s" % error_string(FileAccess.get_open_error()))
 	file.store_buffer(body)
 	var write_error := file.get_error()
 	file.close()
 	if write_error != OK:
 		DirAccess.remove_absolute(zip_path)
-		return { "ok": false, "error": "Cannot save the zip: %s" % error_string(write_error), "path": "" }
+		return fetch_error("Cannot save the zip: %s" % error_string(write_error))
 	var extracted := Zip.extract_plugin(zip_path, plugin_folder, dest_dir)
 	DirAccess.remove_absolute(zip_path)
 	if not extracted["ok"]:
 		Fs.remove_dir(dest_dir)
-		return { "ok": false, "error": extracted["error"], "path": "" }
+		return fetch_error(extracted["error"])
 	return { "ok": true, "error": "", "path": dest_dir, "package_folder": extracted["source_folder"],
 			"warning": folder_warning(extracted["source_folder"], plugin_folder) }
 

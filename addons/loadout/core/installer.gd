@@ -19,6 +19,8 @@ const CONFIRM_PINNED := "pinned"
 const CONFIRM_UNMANAGED := "unmanaged"
 ## First install of a package that keeps the plugin in another folder than the registry entry.
 const CONFIRM_FOLDER := "folder"
+## Backups kept per plugin (the newest ones); older folders are deleted when a new backup is made.
+const MAX_BACKUPS := 10
 
 signal plugin_installed(id: String, version: String)
 signal plugin_updated(id: String, from_version: String, to_version: String)
@@ -43,6 +45,11 @@ func target_dir(entry: LoadoutRegistry.Entry) -> String:
 	return addons_dir.path_join(entry.folder)
 
 
+## Whether the plugin folder holds files. A leftover empty folder counts as not installed.
+func is_installed(entry: LoadoutRegistry.Entry) -> bool:
+	return Fs.has_files(target_dir(entry))
+
+
 ## Version from the installed plugin.cfg, "" when the plugin is not installed.
 func installed_version(entry: LoadoutRegistry.Entry) -> String:
 	var cfg := ConfigFile.new()
@@ -53,7 +60,7 @@ func installed_version(entry: LoadoutRegistry.Entry) -> String:
 
 ## Why installing over the current folder needs the user's confirmation, "" when it does not.
 func check_overwrite(entry: LoadoutRegistry.Entry, lock_entry: LoadoutLockfile.Entry) -> String:
-	if not DirAccess.dir_exists_absolute(target_dir(entry)):
+	if not is_installed(entry):
 		return ""
 	if lock_entry == null:
 		return CONFIRM_UNMANAGED
@@ -67,14 +74,12 @@ func check_overwrite(entry: LoadoutRegistry.Entry, lock_entry: LoadoutLockfile.E
 
 ## Installs version of the plugin from source, replacing an installed version.
 ## Returns { "ok", "error", "id", "from", "to", "hash", "backup_path", "restored",
-## "restart_recommended", "needs_confirmation" }. The caller records "hash" in the lock.
+## "restart_recommended", "needs_confirmation", "load_failed" }. The caller records "hash" in the lock.
+## load_failed: the files were fine but the plugin did not compile or start (often written for
+## another Godot version), so an older release may work.
 func install(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: String,
 		lock_entry: LoadoutLockfile.Entry = null, force: bool = false, enable: bool = true) -> Dictionary:
-	var result := {
-		"ok": false, "error": "", "id": entry.id, "from": installed_version(entry), "to": version,
-		"hash": "", "backup_path": "", "restored": false, "restart_recommended": false, "needs_confirmation": "",
-		"warning": "", "package_folder": "",
-	}
+	var result := _new_result(entry, version)
 	if not force:
 		var reason := check_overwrite(entry, lock_entry)
 		if reason != "":
@@ -88,7 +93,7 @@ func install(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: Strin
 		return _fail(result, fetched["error"])
 	var staged: String = fetched["path"]
 	result["package_folder"] = str(fetched.get("package_folder", ""))
-	if not DirAccess.dir_exists_absolute(target_dir(entry)) and result["package_folder"] != "" \
+	if not is_installed(entry) and result["package_folder"] != "" \
 			and result["package_folder"] != entry.folder:
 		# Plugins often use fixed res://addons/<folder>/ paths: ask before installing under another name.
 		Fs.remove_dir(staging)
@@ -100,7 +105,7 @@ func install(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: Strin
 		Log.write(result["warning"], Log.Level.WARNING)
 	_preserve_uids(target_dir(entry), staged)
 
-	if DirAccess.dir_exists_absolute(target_dir(entry)):
+	if is_installed(entry):
 		await _replace(entry, staged, result)
 	else:
 		await _install_fresh(entry, staged, enable, result)
@@ -123,17 +128,19 @@ func install(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: Strin
 ## the new version loads after the editor restart that must follow right away.
 ## Returns the same dictionary as install() plus "restart_required": true on success.
 func self_update(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: String) -> Dictionary:
-	var result := {
-		"ok": false, "error": "", "id": entry.id, "from": installed_version(entry), "to": version,
-		"hash": "", "backup_path": "", "restored": false, "restart_recommended": false,
-		"needs_confirmation": "", "restart_required": false,
-	}
+	var result := _new_result(entry, version)
+	result["restart_required"] = false
 	var staging := staging_root.path_join(entry.id)
 	var fetched: Dictionary = await _stage(entry, source, version)
 	if not fetched["ok"]:
 		return _fail(result, fetched["error"])
 	var staged: String = fetched["path"]
 	var target := target_dir(entry)
+	# Loadout cannot repair itself after a restart, so the new scripts must compile before the swap.
+	var invalid := editor.validate_scripts(staged)
+	if invalid != OK:
+		Fs.remove_dir(staging)
+		return _fail(result, "The new version of Loadout has a broken script (%s), nothing was changed." % error_string(invalid))
 	_preserve_uids(target, staged)
 	var backup := _backup_path(entry, result["from"])
 	var err := _copy_fresh(target, backup)
@@ -157,6 +164,25 @@ func self_update(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: S
 	Log.write("Loadout updated %s -> %s, restarting the editor." % [result["from"], version])
 	plugin_updated.emit(entry.id, result["from"], version)
 	return result
+
+
+## Backups of the plugin, newest first: [{ "path", "name" (folder name), "version" (from its
+## plugin.cfg, "" when unknown), "modified" (unix time) }].
+func list_backups(entry: LoadoutRegistry.Entry) -> Array[Dictionary]:
+	var list: Array[Dictionary] = []
+	var root := backup_root.path_join(entry.id)
+	for name in DirAccess.get_directories_at(root):
+		var path := root.path_join(name)
+		if not Fs.has_files(path):
+			continue
+		var cfg := ConfigFile.new()
+		var version := ""
+		if cfg.load(path.path_join("plugin.cfg")) == OK:
+			version = str(cfg.get_value("plugin", "version", ""))
+		list.append({ "path": path, "name": name, "version": version, "modified": FileAccess.get_modified_time(path) })
+	list.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return a["name"].naturalnocasecmp_to(b["name"]) > 0 if a["modified"] == b["modified"] else a["modified"] > b["modified"])
+	return list
 
 
 ## Disables and removes the plugin folder (a backup is kept).
@@ -209,23 +235,18 @@ func _install_fresh(entry: LoadoutRegistry.Entry, staged: String, enable: bool, 
 		Fs.remove_dir(target)
 		result["error"] = "Copying to %s failed: %s" % [target, error_string(err)]
 		return
-	if not await editor.scan():
+	var problem := await _check_new_files(target, "Plugin %s" % entry.id, result)
+	if problem != "":
 		await _discard(entry)
-		result["error"] = "The filesystem scan did not finish in time."
-		return
-	err = editor.refresh_scripts(target)
-	if err == OK:
-		err = editor.validate_plugin(target)
-	if err != OK:
-		await _discard(entry)
-		result["error"] = "Plugin %s has a broken script (%s)." % [entry.id, error_string(err)]
+		result["error"] = problem
 		return
 	if enable:
 		await editor.set_plugin_enabled(entry.folder, true)
 		if not editor.is_plugin_running(entry.folder):
 			await editor.set_plugin_enabled(entry.folder, false)
 			await _discard(entry)
-			result["error"] = "Plugin %s could not be enabled." % entry.id
+			result["load_failed"] = true
+			result["error"] = "Plugin %s could not be enabled.%s" % [entry.id, _godot_hint()]
 			return
 	editor.save_project_settings()
 	result["restart_recommended"] = not editor.stale_classes(target).is_empty()
@@ -255,24 +276,34 @@ func _replace(entry: LoadoutRegistry.Entry, staged: String, result: Dictionary) 
 		await _fail_and_restore(entry, backup, was_enabled, result, "Copying to %s failed: %s" % [target, error_string(err)])
 		return
 	# 4. Scan, refresh stale scripts, validate before enabling
-	if not await editor.scan():
-		await _fail_and_restore(entry, backup, was_enabled, result, "The filesystem scan did not finish in time.")
-		return
-	err = editor.refresh_scripts(target)
-	if err == OK:
-		err = editor.validate_plugin(target)
-	if err != OK:
-		await _fail_and_restore(entry, backup, was_enabled, result, "The new version of %s has a broken script (%s)." % [entry.id, error_string(err)])
+	var problem := await _check_new_files(target, "The new version of %s" % entry.id, result)
+	if problem != "":
+		await _fail_and_restore(entry, backup, was_enabled, result, problem)
 		return
 	# 5. Enable and check it runs
 	if was_enabled:
 		await editor.set_plugin_enabled(entry.folder, true)
 		if not editor.is_plugin_running(entry.folder):
-			await _fail_and_restore(entry, backup, was_enabled, result, "The new version of %s could not be enabled." % entry.id)
+			result["load_failed"] = true
+			await _fail_and_restore(entry, backup, was_enabled, result, "The new version of %s could not be enabled.%s" % [entry.id, _godot_hint()])
 			return
 	editor.save_project_settings()
 	result["restart_recommended"] = not editor.stale_classes(target).is_empty()
 	result["ok"] = true
+
+
+## Step 4: scans the new files in, reloads stale scripts and validates the entry script. Returns ""
+## or the problem; subject names what was installed ("Plugin x").
+func _check_new_files(target: String, subject: String, result: Dictionary) -> String:
+	if not await editor.scan():
+		return "The filesystem scan did not finish in time."
+	var err := editor.refresh_scripts(target)
+	if err == OK:
+		err = editor.validate_plugin(target)
+	if err != OK:
+		result["load_failed"] = true
+		return "%s has a broken script (%s).%s" % [subject, error_string(err), _godot_hint()]
+	return ""
 
 
 # 6. Restore the backup after a failed replace.
@@ -329,15 +360,62 @@ func _preserve_uids(target: String, staged: String) -> void:
 		DirAccess.copy_absolute(target.path_join(relative), staged.path_join(relative))
 
 
+## A folder for the backup of version that does not exist yet, so an earlier backup of the same
+## version (e.g. with other manual edits) is never replaced: "1.0.0", "1.0.0-2", "1.0.0-3", ...
 func _backup_path(entry: LoadoutRegistry.Entry, version: String) -> String:
-	return backup_root.path_join(entry.id).path_join(version if version != "" else "unknown")
+	var base := backup_root.path_join(entry.id).path_join(version if version != "" else "unknown")
+	var path := base
+	var index := 2
+	while DirAccess.dir_exists_absolute(path):
+		path = "%s-%d" % [base, index]
+		index += 1
+	return path
 
 
 func _copy_fresh(src: String, dst: String) -> Error:
 	var err := Fs.remove_dir(dst)
 	if err != OK:
 		return err
-	return Fs.copy_dir(src, dst)
+	err = Fs.copy_dir(src, dst)
+	if err == OK:
+		_prune_backups(dst.get_base_dir(), dst)
+	return err
+
+
+## Deletes the oldest backup folders of a plugin beyond MAX_BACKUPS. keep (the backup just made)
+## is never deleted.
+func _prune_backups(plugin_backups: String, keep: String) -> void:
+	var folders: Array[String] = []
+	folders.assign(DirAccess.get_directories_at(plugin_backups))
+	if folders.size() <= MAX_BACKUPS:
+		return
+	# Oldest first; folders made within one second compare by name ("1.0.0-2" before "1.0.0-10").
+	folders.sort_custom(func(a: String, b: String) -> bool:
+		var time_a := FileAccess.get_modified_time(plugin_backups.path_join(a))
+		var time_b := FileAccess.get_modified_time(plugin_backups.path_join(b))
+		return a.naturalnocasecmp_to(b) < 0 if time_a == time_b else time_a < time_b)
+	var excess := folders.size() - MAX_BACKUPS
+	for folder in folders:
+		if excess <= 0:
+			break
+		var path := plugin_backups.path_join(folder)
+		if path != keep and Fs.remove_dir(path) == OK:
+			excess -= 1
+
+
+## A plugin that fails to load is often written for another Godot version (a newer API, or one
+## that was removed), and the release does not say which it needs.
+func _godot_hint() -> String:
+	var version := Engine.get_version_info()
+	return " It may not support Godot %d.%d, which is running now." % [version["major"], version["minor"]]
+
+
+func _new_result(entry: LoadoutRegistry.Entry, version: String) -> Dictionary:
+	return {
+		"ok": false, "error": "", "id": entry.id, "from": installed_version(entry), "to": version,
+		"hash": "", "backup_path": "", "restored": false, "restart_recommended": false, "needs_confirmation": "",
+		"warning": "", "package_folder": "", "load_failed": false,
+	}
 
 
 func _fail(result: Dictionary, error: String) -> Dictionary:

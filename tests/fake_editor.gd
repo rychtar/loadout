@@ -45,6 +45,11 @@ func validate_plugin(dir: String) -> Error:
 	return ERR_PARSE_ERROR if broken_versions.has(_version(dir)) else OK
 
 
+func validate_scripts(dir: String) -> Error:
+	calls.append("validate_scripts")
+	return ERR_PARSE_ERROR if broken_versions.has(_version(dir)) else OK
+
+
 func save_project_settings() -> Error:
 	calls.append("save")
 	return OK

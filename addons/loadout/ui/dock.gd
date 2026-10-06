@@ -8,6 +8,7 @@ extends VBoxContainer
 const RegistryDialog := preload("registry_dialog.gd")
 const VersionDialog := preload("version_dialog.gd")
 const InstallDialog := preload("install_dialog.gd")
+const BackupDialog := preload("backup_dialog.gd")
 const Status := LoadoutManager.Status
 ## Characters of release notes shown in the update confirmation.
 const NOTES_PREVIEW := 600
@@ -85,6 +86,7 @@ var _alert: AcceptDialog
 var _registry_dialog: RegistryDialog
 var _version_dialog: VersionDialog
 var _install_dialog: InstallDialog
+var _backup_dialog: BackupDialog
 var _export_dialog: EditorFileDialog
 var _import_dialog: EditorFileDialog
 var _on_confirm: Callable
@@ -104,7 +106,7 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
-	for dialog: Window in [_confirm, _alert, _registry_dialog, _version_dialog, _install_dialog, _export_dialog, _import_dialog]:
+	for dialog: Window in [_confirm, _alert, _registry_dialog, _version_dialog, _install_dialog, _backup_dialog, _export_dialog, _import_dialog]:
 		if is_instance_valid(dialog):
 			dialog.queue_free()
 
@@ -257,6 +259,10 @@ func _build() -> void:
 	_version_dialog.version_chosen.connect(func(id: String, version: String, pin: bool) -> void:
 		_run(func() -> Dictionary: return await manager.install(id, false, version, pin)))
 	base.add_child(_version_dialog)
+	_backup_dialog = BackupDialog.new()
+	_backup_dialog.backup_chosen.connect(func(id: String, path: String, pin: bool) -> void:
+		_run(func() -> Dictionary: return await manager.restore_backup(id, path, pin)))
+	base.add_child(_backup_dialog)
 	_registry_dialog = RegistryDialog.new()
 	_registry_dialog.store_search = store_search
 	_registry_dialog.entry_submitted.connect(func(data: Dictionary, take_over: bool) -> void:
@@ -308,14 +314,14 @@ func _fit_columns(reset: bool = false) -> void:
 		_columns_fitted = true
 	var font := _tree.get_theme_font("font")
 	var font_size := _tree.get_theme_font_size("font_size")
-	var padding := roundi(COLUMN_PADDING * EditorInterface.get_editor_scale())
+	var scale := EditorInterface.get_editor_scale()
+	var padding := roundi(COLUMN_PADDING * scale)
 	var status_texts: PackedStringArray = ["Status"]
 	for text: String in STATUS_TEXT.values():
 		status_texts.append(text)
 	var version_texts: PackedStringArray = ["Version"]
 	for state in manager.states:
 		version_texts.append(_version_text(state))
-	var scale := EditorInterface.get_editor_scale()
 	var widths := fit_widths(_widest(font, font_size, status_texts) + padding, _widest(font, font_size, version_texts) + padding,
 			roundi(_tree.size.x), roundi(MIN_COLUMN * scale), roundi(MIN_NAME_COLUMN * scale))
 	_status_width = widths.x
@@ -394,9 +400,7 @@ func _place_grips() -> void:
 
 
 func _rebuild_unregistered() -> void:
-	for child in _unregistered_rows.get_children():
-		_unregistered_rows.remove_child(child)
-		child.queue_free()
+	_clear(_unregistered_rows)
 	for info: Dictionary in manager.unregistered:
 		var row := HBoxContainer.new()
 		var label := Label.new()
@@ -416,14 +420,17 @@ func _rebuild_unregistered() -> void:
 
 
 func _update_detail() -> void:
-	for container: Container in [_detail_grid, _detail_actions]:
-		for child in container.get_children():
-			container.remove_child(child)
-			child.queue_free()
+	_clear(_detail_grid)
+	_clear(_detail_actions)
 	var state := manager.get_state(_selected_id)
 	if state == null:
 		_detail_title.text = ""
-		_detail_message.text = "The registry is empty. Add a plugin with the + button." if manager.states.is_empty() and manager.errors.is_empty() else "Select a plugin in the list."
+		if not manager.loaded:
+			_detail_message.text = "Reading the registry and checking the sources…"
+		elif manager.states.is_empty() and manager.errors.is_empty():
+			_detail_message.text = "The registry is empty. Add a plugin with the + button."
+		else:
+			_detail_message.text = "Select a plugin in the list."
 		return
 	var folder := state.entry.folder if state.entry != null else state.id
 	_detail_title.text = "%s  (addons/%s)" % [state.display_name, folder]
@@ -461,6 +468,7 @@ func _add_actions(state: LoadoutManager.PluginState) -> void:
 			_action("Unpin", func() -> Error: return await manager.set_pinned(id, false))
 			_remove_action(state)
 		Status.MODIFIED:
+			_action("Show changes…", func() -> Dictionary: return await manager.changed_files(id))
 			_action("Accept changes", func() -> Error: return await manager.adopt(id))
 			_overwrite_action(state)
 			_remove_action(state)
@@ -474,6 +482,10 @@ func _add_actions(state: LoadoutManager.PluginState) -> void:
 		var versions := manager.available_versions(id)
 		if versions.size() > 1:
 			_action("Install version…", func() -> void: _version_dialog.open_for(state, versions))
+	if state.entry != null and state.entry.folder != LoadoutManager.SELF_FOLDER and state.status != Status.ORPHAN:
+		var backups := manager.available_backups(id)
+		if not backups.is_empty():
+			_action("Restore backup…", func() -> void: _backup_dialog.open_for(state, backups))
 	if state.entry != null:
 		_action("Edit…", func() -> void: _registry_dialog.open_edit(state.entry, state.display_name))
 		_action("Remove from registry…", func() -> void:
@@ -482,7 +494,7 @@ func _add_actions(state: LoadoutManager.PluginState) -> void:
 
 
 func _confirm_update(state: LoadoutManager.PluginState) -> void:
-	var backup := "user://loadout_backup/%s/%s/" % [state.id, state.installed_version]
+	var backup := "user://loadout_backup/%s/" % state.id
 	if state.entry.folder == LoadoutManager.SELF_FOLDER:
 		_ask("Update Loadout %s → %s?%s\n\nLoadout replaces its files (backup in %s) and the editor restarts right away. Unsaved scenes are saved before the restart."
 				% [state.installed_version, state.target_version, _notes_text(state), backup],
@@ -497,10 +509,7 @@ func _confirm_update(state: LoadoutManager.PluginState) -> void:
 func _notes_text(state: LoadoutManager.PluginState) -> String:
 	var text := ""
 	if state.release_notes != "":
-		var notes := state.release_notes.strip_edges()
-		if notes.length() > NOTES_PREVIEW:
-			notes = notes.left(NOTES_PREVIEW) + "…"
-		text += "\n\nRelease notes:\n%s" % notes
+		text += "\n\nRelease notes:\n%s" % LoadoutSource.trim_notes(state.release_notes.strip_edges(), NOTES_PREVIEW)
 	if state.release_url != "":
 		text += "\n\n%s" % state.release_url
 	return text
@@ -632,17 +641,25 @@ func _handle_result(result: Variant) -> void:
 				if notice != "":
 					_show_alert(notice)
 				return
+			# After a confirmation the action is repeated with the version and pin the user chose.
+			var version: String = result.get("version", "")
+			var pin: bool = result.get("pin", false)
 			if result.get("needs_confirmation", "") == LoadoutInstaller.CONFIRM_FOLDER:
 				var folder_id: String = result["id"]
 				var package_folder: String = result["package_folder"]
 				_ask("%s\n\nPlugins often use fixed res://addons/<folder>/ paths and break under another name. Use addons/%s in the registry and install?"
 						% [result["error"], package_folder], "Use %s" % package_folder, func() -> Variant:
 							var error := await manager.set_registry_folder(folder_id, package_folder)
-							return error if error != "" else await manager.install(folder_id))
+							return error if error != "" else await manager.install(folder_id, false, version, pin))
+			elif result.get("fallback_version", "") != "":
+				var plugin_id: String = result["id"]
+				var older: String = result["fallback_version"]
+				_ask("%s\n\nTry the older version %s? It is pinned in this project, so the newer one is not offered again here." % [result["error"], older],
+						"Install %s" % older, func() -> Dictionary: return await manager.install(plugin_id, false, older, true))
 			elif result.get("needs_confirmation", "") != "":
 				var id: String = result["id"]
 				_ask(result["error"] + "\n\nOverwrite anyway? The current content is backed up.", "Overwrite",
-						func() -> Dictionary: return await manager.install(id, true))
+						func() -> Dictionary: return await manager.install(id, true, version, pin))
 			elif result.get("error", "") != "":
 				_show_alert(result["error"])
 		TYPE_INT:
@@ -658,6 +675,13 @@ func _offer_restart() -> void:
 			"Restart editor", func() -> void: EditorInterface.restart_editor(true))
 
 
+## Removes the children at once (queue_free alone leaves them in the layout until the frame ends).
+func _clear(container: Node) -> void:
+	for child in container.get_children():
+		container.remove_child(child)
+		child.queue_free()
+
+
 func _set_busy(busy: bool) -> void:
 	_busy = busy
 	_busy_label.visible = busy
@@ -666,6 +690,11 @@ func _set_busy(busy: bool) -> void:
 	for child in _detail_actions.get_children():
 		if child is Button:
 			child.disabled = busy
+	# Rows rebuilt while busy (a refresh during an action) were created disabled, so they are reset here too.
+	for row in _unregistered_rows.get_children():
+		for child in row.get_children():
+			if child is Button:
+				child.disabled = busy
 
 
 func _ask(text: String, ok_text: String, on_confirm: Callable, cancel_text: String = "Cancel") -> void:

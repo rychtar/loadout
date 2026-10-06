@@ -54,8 +54,12 @@ plugin list to resize it, double-click it to fit the column to its text.
   does every one in a single confirmation. **⟳** checks for updates now.
 - **Pin** keeps a plugin at its version in this project only. **Install version…** lists every
   release, and installing an older one pins it.
-- **Modified** means the folder differs from the lock: **Accept changes** keeps your edits,
-  **Overwrite** replaces them (with a backup).
+- **Modified** means the folder differs from the lock: **Show changes…** lists the files,
+  **Accept changes** keeps your edits, **Overwrite** replaces them (with a backup).
+- **Restore backup…** brings back an earlier copy Loadout saved (before an update, an overwrite or a
+  removal). The newest 10 backups of each plugin are kept.
+- **Include pre-releases** (in the add/edit dialog) offers betas and release candidates as updates.
+  If a new release does not start on your Godot version, Loadout offers the next older one.
 - **Remove from project…** deletes the folder (with a backup) and ignores the plugin here.
   **Remove from registry…** stops offering it in all projects. **⋮** exports and imports the registry.
 

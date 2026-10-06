@@ -10,9 +10,14 @@ extends LoadoutSource
 
 const API := "https://api.github.com"
 const PER_PAGE := 50
-const MAX_NOTES := 4000
+## Pages of releases read at most (a full page means there may be older releases, e.g. an older
+## major version a range like ^1 needs).
+const MAX_PAGES := 4
 ## The version is the end of the tag, after the start or a separator (so "godot4-1.2.3" is 1.2.3, not 4.0.0-1.2.3).
 const _TAG_VERSION_PATTERN := "(?:^|[-_/\\s])[vV]?(\\d+(?:\\.\\d+){0,2}(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?)$"
+
+## A tag that is a single big number ("nightly-20260105", "build-2024") is a date or build number.
+const MAX_BARE_MAJOR := 1000
 
 static var _tag_regex: RegEx
 
@@ -38,55 +43,69 @@ func is_remote() -> bool:
 	return true
 
 
+## The chosen package depends on the plugin folder, so plugins of one repo do not share an entry.
 func cache_key() -> String:
-	return "github:%s" % repo
+	return "github:%s#%s" % [repo, folder]
 
 
 func list_releases(etag: String = "") -> Dictionary:
-	var result := { "ok": false, "error": "", "not_modified": false, "etag": etag, "releases": [] }
 	var headers := _api_headers()
 	if etag != "":
 		headers.append("If-None-Match: %s" % etag)
 	var response: Dictionary = await _http.get_json("%s/repos/%s/releases?per_page=%d" % [API, repo, PER_PAGE], headers)
 	if not response["ok"]:
-		result["error"] = response["error"]
-		return result
+		return listing_error(response["error"])
 	var code: int = response["code"]
 	var response_headers: Dictionary = response["headers"]
 	if code == 304:
-		result["ok"] = true
-		result["not_modified"] = true
-		return result
+		return { "ok": true, "error": "", "not_modified": true, "etag": etag, "releases": [] }
 	if code != 200:
-		result["error"] = _status_error(code, response_headers)
-		return result
+		return listing_error(_status_error(code, response_headers))
 	var data: Variant = response["data"]
 	if typeof(data) != TYPE_ARRAY:
-		result["error"] = "Unexpected GitHub answer for %s." % repo
-		return result
+		return listing_error("Unexpected GitHub answer for %s." % repo)
 	var list: Array[Dictionary] = []
+	_append_releases(list, data)
+	var next_url := _next_page_url(response_headers)
+	var pages := 1
+	while next_url != "" and pages < MAX_PAGES and (data as Array).size() >= PER_PAGE:
+		var page: Dictionary = await _http.get_json(next_url, _api_headers())
+		if not page["ok"] or page["code"] != 200 or typeof(page["data"]) != TYPE_ARRAY:
+			break
+		data = page["data"]
+		_append_releases(list, data)
+		next_url = _next_page_url(page["headers"])
+		pages += 1
+	return { "ok": true, "error": "", "not_modified": false, "etag": str(response_headers.get("etag", "")), "releases": list }
+
+
+func _append_releases(list: Array[Dictionary], data: Array) -> void:
 	for item: Variant in data:
 		if typeof(item) == TYPE_DICTIONARY:
 			var release := _parse_release(item)
 			if not release.is_empty():
 				list.append(release)
-	result["ok"] = true
-	result["etag"] = str(response_headers.get("etag", ""))
-	result["releases"] = list
-	return result
+
+
+## The rel="next" address of a Link header, "" when there is none or it leaves the API host (the
+## token must not go anywhere else).
+func _next_page_url(headers: Dictionary) -> String:
+	for part in str(headers.get("link", "")).split(","):
+		if part.contains('rel="next"'):
+			var url := part.get_slice(">", 0).get_slice("<", 1).strip_edges()
+			return url if url.begins_with(API + "/") else ""
+	return ""
 
 
 func fetch(version: String, dest_dir: String) -> Dictionary:
 	var release := get_release(version)
 	if release.is_empty():
-		return { "ok": false, "error": "Release %s of %s is unknown, check for updates." % [version, repo], "path": "" }
+		return fetch_error("Release %s of %s is unknown, check for updates." % [version, repo])
 	var url := str(release.get("download_url", ""))
-	var response: Dictionary = await _http.get_request(url, default_headers())
-	if not response["ok"]:
-		return { "ok": false, "error": response["error"], "path": "" }
-	if response["code"] != 200:
-		return { "ok": false, "error": "Download of %s failed: %s" % [url, _status_error(response["code"], response["headers"])], "path": "" }
-	return _save_and_extract(response["body"], folder, dest_dir)
+	if url == "":
+		return fetch_error("Release %s of %s has no downloadable package." % [version, repo])
+	var response: Dictionary = await _download(_http, url)
+	return _save_and_extract(response["body"], folder, dest_dir) if response["ok"] else response
 
 
 func _parse_release(item: Dictionary) -> Dictionary:
@@ -97,16 +116,13 @@ func _parse_release(item: Dictionary) -> Dictionary:
 		_tag_regex = RegEx.create_from_string(_TAG_VERSION_PATTERN)
 	var found := _tag_regex.search(tag)
 	var version := LoadoutVersion.parse(found.get_string(1)) if found != null else null
-	if version == null:
+	if version == null or (version.precision == 1 and version.major >= MAX_BARE_MAJOR):
 		return {}
-	var notes := str(item.get("body", "") if item.get("body") != null else "")
-	if notes.length() > MAX_NOTES:
-		notes = notes.left(MAX_NOTES) + "…"
 	return {
 		"version": str(version),
 		"tag": tag,
-		"prerelease": bool(item.get("prerelease", false)) or version.is_prerelease(),
-		"notes": notes,
+		"prerelease": json_bool(item.get("prerelease"), false) or version.is_prerelease(),
+		"notes": trim_notes(item.get("body")),
 		"url": str(item.get("html_url", "")),
 		"download_url": _package_url(item),
 	}
@@ -120,10 +136,15 @@ func _package_url(item: Dictionary) -> String:
 			zips.append(asset)
 	for asset in zips:
 		if str(asset["name"]).to_lower().contains(folder.to_lower()):
-			return str(asset.get("browser_download_url", ""))
+			return _text(asset.get("browser_download_url"))
 	if zips.size() == 1:
-		return str(zips[0].get("browser_download_url", ""))
-	return str(item.get("zipball_url", ""))
+		return _text(zips[0].get("browser_download_url"))
+	return _text(item.get("zipball_url"))
+
+
+## A JSON value as text, null becomes "".
+static func _text(value: Variant) -> String:
+	return "" if value == null else str(value)
 
 
 func _api_headers() -> PackedStringArray:

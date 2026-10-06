@@ -5,10 +5,14 @@ extends RefCounted
 ## Semantic version (major.minor.patch[-prerelease][+build]) and version ranges.
 ## Accepted versions are lenient: optional leading "v", missing minor/patch default to 0.
 ## Ranges: "" or "*" (any), "1.2.3" (exact), "1.2" (1.2.x), "^1.2.3", "~1.2.3".
-## Prereleases only match a range whose own version is a prerelease of the same major.minor.patch.
+## Prereleases only match a range whose own version is a prerelease of the same major.minor.patch,
+## unless include_prereleases is set (then they match like any version below the range's upper bound).
 
 const _VERSION_PATTERN := "^[vV]?(0|[1-9]\\d*)(?:\\.(0|[1-9]\\d*))?(?:\\.(0|[1-9]\\d*))?" \
 		+ "(?:-([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+
+## Longer numbers would overflow an int.
+const MAX_DIGITS := 9
 
 static var _regex: RegEx
 
@@ -27,6 +31,9 @@ static func parse(text: String) -> LoadoutVersion:
 	var found := _regex.search(text.strip_edges())
 	if found == null:
 		return null
+	for group in 3:
+		if found.get_string(group + 1).length() > MAX_DIGITS:
+			return null
 	var version := LoadoutVersion.new()
 	version.major = found.get_string(1).to_int()
 	version.precision = 1
@@ -38,12 +45,16 @@ static func parse(text: String) -> LoadoutVersion:
 		version.precision = 3
 	if found.get_string(4) != "":
 		version.prerelease = found.get_string(4).split(".")
+		for identifier in version.prerelease:
+			# Numeric identifiers have no leading zeros (semver 2.0.0, rule 9).
+			if identifier.length() > 1 and identifier.begins_with("0") and identifier.is_valid_int():
+				return null
 	return version
 
 
-static func satisfies(version_text: String, range_text: String) -> bool:
+static func satisfies(version_text: String, range_text: String, include_prereleases: bool = false) -> bool:
 	var version := parse(version_text)
-	return version != null and version.matches(range_text)
+	return version != null and version.matches(range_text, include_prereleases)
 
 
 static func is_valid_range(range_text: String) -> bool:
@@ -51,12 +62,15 @@ static func is_valid_range(range_text: String) -> bool:
 
 
 ## Highest version from versions that matches range_text, returned in its original form ("" if none).
-static func max_satisfying(versions: PackedStringArray, range_text: String) -> String:
+static func max_satisfying(versions: PackedStringArray, range_text: String, include_prereleases: bool = false) -> String:
+	var bounds := _bounds(range_text)
 	var best_text := ""
 	var best: LoadoutVersion = null
+	if not bounds["ok"]:
+		return best_text
 	for text in versions:
 		var version := parse(text)
-		if version == null or not version.matches(range_text):
+		if version == null or not version._within(bounds, include_prereleases):
 			continue
 		if best == null or version.compare(best) > 0:
 			best = version
@@ -64,29 +78,44 @@ static func max_satisfying(versions: PackedStringArray, range_text: String) -> S
 	return best_text
 
 
-func matches(range_text: String) -> bool:
+func matches(range_text: String, include_prereleases: bool = false) -> bool:
 	var bounds := _bounds(range_text)
-	if not bounds["ok"]:
-		return false
+	return bounds["ok"] and _within(bounds, include_prereleases)
+
+
+## Whether this version lies within bounds from _bounds() (which must be ok).
+func _within(bounds: Dictionary, include_prereleases: bool = false) -> bool:
 	var low: LoadoutVersion = bounds["min"]
 	var high: LoadoutVersion = bounds["max"]
-	if is_prerelease():
+	if is_prerelease() and not include_prereleases:
 		if low == null or not low.is_prerelease() or not _same_numbers(low):
 			return false
 	if low != null and compare(low) < 0:
 		return false
 	if high != null and bounds["exact"]:
 		return compare(high) == 0
-	if high != null and compare(high) >= 0:
+	# 2.0.0-beta is below ^1.0.0's bound 2.0.0 but belongs to 2.0.0, so the bound compares the numbers only.
+	if high != null and (compare(high) >= 0 or (include_prereleases and is_prerelease() and _core_compare(high) >= 0)):
 		return false
 	return true
 
 
+func _core_compare(other: LoadoutVersion) -> int:
+	if major != other.major:
+		return signi(major - other.major)
+	if minor != other.minor:
+		return signi(minor - other.minor)
+	return signi(patch - other.patch)
+
+
 ## -1, 0 or 1. Build metadata is ignored, prerelease precedence follows semver.
 func compare(other: LoadoutVersion) -> int:
-	for pair: Array in [[major, other.major], [minor, other.minor], [patch, other.patch]]:
-		if pair[0] != pair[1]:
-			return -1 if pair[0] < pair[1] else 1
+	if major != other.major:
+		return signi(major - other.major)
+	if minor != other.minor:
+		return signi(minor - other.minor)
+	if patch != other.patch:
+		return signi(patch - other.patch)
 	return _compare_prerelease(prerelease, other.prerelease)
 
 
@@ -127,14 +156,9 @@ static func _bounds(range_text: String) -> Dictionary:
 				high.minor = low.minor + 1
 			else:
 				high.patch = low.patch + 1
-		"~":
-			high.major = low.major
-			if low.precision == 1:
-				high.major = low.major + 1
-			else:
-				high.minor = low.minor + 1
 		_:
-			if low.precision == 3:
+			# "~1.2.3" and the partial "1.2" / "1" share the bound; a full version is exact.
+			if operator == "" and low.precision == 3:
 				return { "ok": true, "min": low, "max": low, "exact": true }
 			high.major = low.major
 			if low.precision == 1:
@@ -146,9 +170,7 @@ static func _bounds(range_text: String) -> Dictionary:
 
 static func _compare_prerelease(a: PackedStringArray, b: PackedStringArray) -> int:
 	if a.is_empty() or b.is_empty():
-		if a.is_empty() and b.is_empty():
-			return 0
-		return 1 if a.is_empty() else -1
+		return signi(int(a.is_empty()) - int(b.is_empty()))
 	for i in mini(a.size(), b.size()):
 		var a_numeric := a[i].is_valid_int()
 		var b_numeric := b[i].is_valid_int()

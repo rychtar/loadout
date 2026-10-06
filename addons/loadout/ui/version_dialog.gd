@@ -28,11 +28,16 @@ func _init() -> void:
 	_list.custom_minimum_size = Vector2(0, roundi(150 * scale))
 	_list.item_selected.connect(_on_selected)
 	box.add_child(_list)
+	# Long notes scroll instead of growing the dialog past the screen.
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.custom_minimum_size = Vector2(0, roundi(140 * scale))
+	box.add_child(scroll)
 	_notes = Label.new()
 	_notes.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_notes.custom_minimum_size.x = roundi(440 * scale)
+	_notes.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_notes.modulate = Color(1, 1, 1, 0.8)
-	box.add_child(_notes)
+	scroll.add_child(_notes)
 	_pin_check = CheckBox.new()
 	_pin_check.text = "Pin to this version (no update offers in this project)"
 	box.add_child(_pin_check)
@@ -44,7 +49,7 @@ func open_for(state: LoadoutManager.PluginState, versions: Array[Dictionary]) ->
 	_versions = versions
 	_newest_in_range = ""
 	for release in versions:
-		if release["in_range"]:
+		if release["in_range"] and release["offered"]:
 			_newest_in_range = release["version"]
 			break
 	title = "Install a version of %s" % state.display_name
@@ -72,12 +77,22 @@ func open_for(state: LoadoutManager.PluginState, versions: Array[Dictionary]) ->
 
 func _on_selected(index: int) -> void:
 	var release: Dictionary = _versions[index]
-	var notes := str(release["notes"]).strip_edges()
-	if notes.length() > NOTES_PREVIEW:
-		notes = notes.left(NOTES_PREVIEW) + "…"
+	var notes := LoadoutSource.trim_notes(_tidy_notes(str(release["notes"])), NOTES_PREVIEW)
 	_notes.text = notes if notes != "" else "No release notes."
 	_pin_check.button_pressed = release["version"] != _newest_in_range
 	ok_button_text = "Install %s" % release["version"]
+
+
+## Store notes come as BBCode with a blank line between every line. Drops the tags and the blank lines
+## so the preview stays short and readable in a plain Label.
+static func _tidy_notes(raw: String) -> String:
+	var tags := RegEx.create_from_string("\\[/?(p|ul|ol|li|b|i|u|s|code|h[1-6]|br)\\]")
+	var lines: PackedStringArray = []
+	for line in tags.sub(raw.replace("[li]", "• "), "", true).split("\n"):
+		var text := line.strip_edges()
+		if text != "":
+			lines.append(text)
+	return "\n".join(lines)
 
 
 func _on_confirmed() -> void:

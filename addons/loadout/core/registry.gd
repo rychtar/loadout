@@ -20,6 +20,9 @@ const _STORE_ASSET_PATTERN := "^[a-z0-9][a-z0-9_-]*/[a-z0-9][a-z0-9_.-]*$"
 const _NAME_PATTERN := "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
 const _REPO_PATTERN := "^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$"
 const _GITHUB_URL_PREFIX := "https://github.com/"
+## Names Windows reserves for devices (with any extension), a folder called so cannot be created there.
+const _RESERVED_NAMES: PackedStringArray = ["con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5",
+		"com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"]
 
 
 class Entry:
@@ -30,20 +33,32 @@ class Entry:
 	var source: Dictionary
 	var version_range: String = "*"
 	var auto_install: bool = true
+	## Offer pre-releases (1.3.0-beta.1, or releases the source flags as pre-releases) as updates.
+	var prereleases: bool = false
+	## Fields this version does not know (written by a newer Loadout), kept when saving.
+	var extra: Dictionary = {}
 
 	func to_dict() -> Dictionary:
-		return {
+		var data := extra.duplicate(true)
+		data.merge({
 			"id": id,
 			"folder": folder,
 			"source": source.duplicate(),
 			"range": version_range,
 			"auto_install": auto_install,
-		}
+		}, true)
+		if prereleases:
+			data["prereleases"] = true
+		return data
 
+
+const ENTRY_KEYS: PackedStringArray = ["id", "folder", "source", "range", "auto_install", "prereleases"]
 
 static var _regex_cache: Dictionary[String, RegEx] = {}
 
 var entries: Array[Entry] = []
+## Top-level fields this version does not know, kept when saving.
+var extra: Dictionary = {}
 ## Problems found while parsing, for the dock.
 var warnings: PackedStringArray = []
 
@@ -58,6 +73,9 @@ static func from_dict(data: Variant) -> Dictionary:
 	if typeof(plugins) != TYPE_ARRAY:
 		return { "ok": false, "error": "\"plugins\" in the registry must be a list.", "registry": null }
 	var registry := LoadoutRegistry.new()
+	for key: Variant in data:
+		if key != "schema" and key != "plugins":
+			registry.extra[key] = data[key]
 	for item: Variant in plugins:
 		var error := registry.add_entry(item)
 		if error != "":
@@ -69,16 +87,8 @@ static func from_dict(data: Variant) -> Dictionary:
 static func load_file(path: String) -> Dictionary:
 	var read := JsonStore.read(path, SCHEMA)
 	var result := { "ok": false, "error": read["error"], "registry": null, "missing": read["missing"], "backup_path": read["backup_path"] }
-	if not read["ok"]:
-		return result
-	if read["missing"]:
-		result["ok"] = true
-		result["registry"] = LoadoutRegistry.new()
-		return result
-	var parsed := from_dict(read["data"])
-	result["ok"] = parsed["ok"]
-	result["error"] = parsed["error"]
-	result["registry"] = parsed["registry"]
+	if read["ok"]:
+		result.merge({ "ok": true, "error": "", "registry": LoadoutRegistry.new() } if read["missing"] else from_dict(read["data"]), true)
 	return result
 
 
@@ -103,10 +113,17 @@ static func parse_entry(data: Variant) -> Dictionary:
 	if typeof(auto_install) != TYPE_BOOL:
 		return _entry_error(id, "auto_install must be true or false")
 	entry.auto_install = auto_install
+	var prereleases: Variant = data.get("prereleases", false)
+	if typeof(prereleases) != TYPE_BOOL:
+		return _entry_error(id, "prereleases must be true or false")
+	entry.prereleases = prereleases
 	var source := _parse_source(data.get("source"))
-	if not source["ok"]:
+	if source["error"] != "":
 		return _entry_error(id, source["error"])
 	entry.source = source["source"]
+	for key: Variant in data:
+		if not ENTRY_KEYS.has(key):
+			entry.extra[key] = data[key]
 	return { "ok": true, "error": "", "entry": entry }
 
 
@@ -119,7 +136,9 @@ func to_dict() -> Dictionary:
 	var plugins: Array[Dictionary] = []
 	for entry in entries:
 		plugins.append(entry.to_dict())
-	return { "schema": SCHEMA, "plugins": plugins }
+	var data := extra.duplicate(true)
+	data.merge({ "schema": SCHEMA, "plugins": plugins }, true)
+	return data
 
 
 func get_entry(id: String) -> Entry:
@@ -160,6 +179,7 @@ func update_entry(id: String, data: Dictionary) -> String:
 	entry.source = updated.source
 	entry.version_range = updated.version_range
 	entry.auto_install = updated.auto_install
+	entry.prereleases = updated.prereleases
 	return ""
 
 
@@ -204,25 +224,36 @@ func remove_entry(id: String) -> bool:
 	return false
 
 
+## Returns { "error": String, "source": Dictionary } (source only when error is "").
 static func _parse_source(data: Variant) -> Dictionary:
+	var parsed := _parse_known_source(data)
+	if parsed["error"] == "":
+		# Fields of a newer Loadout stay in the source.
+		for key: Variant in (data as Dictionary):
+			if not parsed["source"].has(key) and key != "path" and key != "repo" and key != "asset" and key != "asset_id":
+				parsed["source"][key] = data[key]
+	return parsed
+
+
+static func _parse_known_source(data: Variant) -> Dictionary:
 	if typeof(data) != TYPE_DICTIONARY:
-		return { "ok": false, "error": "source missing" }
+		return { "error": "source missing" }
 	match data.get("type"):
 		SOURCE_LOCAL:
 			var path: Variant = data.get("path", "")
 			if typeof(path) != TYPE_STRING or not path.is_absolute_path() or path.contains("://"):
-				return { "ok": false, "error": "a local source needs an absolute path" }
-			return { "ok": true, "source": { "type": SOURCE_LOCAL, "path": path } }
+				return { "error": "a local source needs an absolute path" }
+			return { "error": "", "source": { "type": SOURCE_LOCAL, "path": path } }
 		SOURCE_GITHUB:
 			var repo: Variant = data.get("repo", "")
 			if typeof(repo) != TYPE_STRING:
-				return { "ok": false, "error": "invalid GitHub repository" }
+				return { "error": "invalid GitHub repository" }
 			if repo.begins_with("http://"):
-				return { "ok": false, "error": "only HTTPS is allowed" }
+				return { "error": "only HTTPS is allowed" }
 			var normalized := _normalize_repo(repo)
 			if normalized == "":
-				return { "ok": false, "error": "invalid GitHub repository %s (expected owner/name)" % repo }
-			return { "ok": true, "source": { "type": SOURCE_GITHUB, "repo": normalized } }
+				return { "error": "invalid GitHub repository %s (expected owner/name)" % repo }
+			return { "error": "", "source": { "type": SOURCE_GITHUB, "repo": normalized } }
 		SOURCE_ASSETLIB:
 			var asset_id: Variant = data.get("asset_id", "")
 			if typeof(asset_id) == TYPE_FLOAT and is_equal_approx(asset_id, roundf(asset_id)):
@@ -230,19 +261,19 @@ static func _parse_source(data: Variant) -> Dictionary:
 			if typeof(asset_id) == TYPE_INT:
 				asset_id = str(asset_id)
 			if typeof(asset_id) != TYPE_STRING or not asset_id.is_valid_int() or asset_id.to_int() <= 0:
-				return { "ok": false, "error": "invalid Asset Library asset id %s" % var_to_str(asset_id) }
-			return { "ok": true, "source": { "type": SOURCE_ASSETLIB, "asset_id": asset_id } }
+				return { "error": "invalid Asset Library asset id %s" % var_to_str(asset_id) }
+			return { "error": "", "source": { "type": SOURCE_ASSETLIB, "asset_id": asset_id } }
 		SOURCE_STORE:
 			var asset: Variant = data.get("asset", "")
 			if typeof(asset) != TYPE_STRING:
-				return { "ok": false, "error": "invalid Asset Store asset" }
+				return { "error": "invalid Asset Store asset" }
 			var text: String = asset.strip_edges()
 			if text.begins_with(_STORE_URL_PREFIX):
 				text = text.trim_prefix(_STORE_URL_PREFIX).trim_suffix("/")
 			if not _matches(_STORE_ASSET_PATTERN, text):
-				return { "ok": false, "error": "invalid Asset Store asset %s (expected publisher/slug)" % asset }
-			return { "ok": true, "source": { "type": SOURCE_STORE, "asset": text } }
-	return { "ok": false, "error": "unknown source type %s" % var_to_str(data.get("type")) }
+				return { "error": "invalid Asset Store asset %s (expected publisher/slug)" % asset }
+			return { "error": "", "source": { "type": SOURCE_STORE, "asset": text } }
+	return { "error": "unknown source type %s" % var_to_str(data.get("type")) }
 
 
 static func _normalize_repo(repo: String) -> String:
@@ -251,13 +282,15 @@ static func _normalize_repo(repo: String) -> String:
 		text = text.trim_prefix(_GITHUB_URL_PREFIX).trim_suffix("/").trim_suffix(".git")
 	elif text.contains("://"):
 		return ""
-	if not _matches(_REPO_PATTERN, text):
+	text = text.trim_suffix(".git")
+	if not _matches(_REPO_PATTERN, text) or text.get_file().begins_with("."):
 		return ""
 	return text
 
 
 static func _is_valid_name(text: String) -> bool:
-	return _matches(_NAME_PATTERN, text) and not text.contains("..")
+	return _matches(_NAME_PATTERN, text) and not text.contains("..") and not text.ends_with(".") \
+			and not _RESERVED_NAMES.has(text.get_slice(".", 0).to_lower())
 
 
 static func _matches(pattern: String, text: String) -> bool:

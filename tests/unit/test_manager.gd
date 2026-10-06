@@ -421,6 +421,30 @@ func test_install_updates() -> void:
 	check_eq(_status("fake_b"), Manager.Status.PINNED, "b untouched")
 
 
+func test_update_all_updates_loadout_last() -> void:
+	# Loadout comes first in the registry, but its update restarts the editor, so fake_a must be done by then.
+	_setup("update_all_self_last", [{ "id": "loadout", "folder": "loadout", "source": { "type": "local", "path": "/loadout" } },
+			_local("fake_a", "1.0.0")])
+	Fs.copy_dir(_loadout_package("0.0.1"), addons.path_join("loadout"))
+	var loadout_source := FakeSource.new({ "0.0.1": _loadout_package("0.0.1") })
+	fake_sources["loadout"] = loadout_source
+	var source_a := _fake("fake_a", ["1.0.0"])
+	await manager.refresh()
+	await manager.install_missing()
+	loadout_source.versions["0.0.2"] = _loadout_package("0.0.2")
+	source_a.versions["1.1.0"] = FIXTURES.path_join("1.1.0")
+	await manager.refresh(true)
+	check_eq(manager.update_ids(), PackedStringArray(["loadout", "fake_a"]), "both have an update, Loadout first")
+	# The lambda captures only the path and the array, not self (no reference cycle suite <-> manager).
+	var lock_path := _lock_path()
+	var locked_at_restart: Array[String] = []
+	manager.restart_required.connect(func() -> void: locked_at_restart.append(FileAccess.get_file_as_string(lock_path)))
+	var summary: Dictionary = await manager.install_updates()
+	check_eq(summary["installed"], PackedStringArray(["fake_a", "loadout"]), "Loadout installed last")
+	check_eq(locked_at_restart.size(), 1, "restart requested once")
+	check(locked_at_restart[0].contains("\"version\": \"1.1.0\""), "fake_a was already updated when the restart was requested")
+
+
 func _loadout_package(version: String) -> String:
 	var dir := temp_dir("manager_loadout_pkg_" + version)
 	write_text(dir.path_join("plugin.cfg"), "[plugin]\n\nname=\"Loadout\"\nversion=\"%s\"\nscript=\"plugin.gd\"\n" % version)
@@ -454,7 +478,7 @@ func test_self_update_requests_restart() -> void:
 	var result: Dictionary = await manager.install("loadout")
 	check(result["ok"], "ok: %s" % result["error"])
 	check_eq(restarts[0], 1, "restart requested")
-	check(editor.calls.is_empty(), "Loadout never disabled itself")
+	check_eq(editor.calls, PackedStringArray(["validate_scripts"]), "Loadout was only validated, never disabled or scanned")
 	check_eq(_saved_lock().get_entry("loadout").version, "0.0.2", "lock updated before the restart")
 
 

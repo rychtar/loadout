@@ -33,7 +33,8 @@ func _enter_tree() -> void:
 	_register_settings()
 	var settings := EditorInterface.get_editor_settings()
 	var token := func() -> String: return str(settings.get_setting(TOKEN_SETTING)) if settings.has_setting(TOKEN_SETTING) else ""
-	var godot_version := "%d.%d" % [Engine.get_version_info()["major"], Engine.get_version_info()["minor"]]
+	var version_info := Engine.get_version_info()
+	var godot_version := "%d.%d" % [version_info["major"], version_info["minor"]]
 	var factory := func(entry: LoadoutRegistry.Entry) -> LoadoutSource: return LoadoutSource.create(entry, http, token, godot_version)
 	_manager = LoadoutManager.new(installer, registry_path, LoadoutLockfile.DEFAULT_PATH, factory, checker)
 	_dock = Dock.new()

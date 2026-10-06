@@ -19,6 +19,9 @@ extends RefCounted
 ##   first run updates Loadout from the dock and the editor restarts itself. Godot relaunches it
 ##   without --headless and without the arguments after "--", so close that editor and run the
 ##   same command again: the second run checks the new version and writes user://loadout_smoke/self.txt
+## Self-update validation, headless, one session, works on a copy under user:// (no restart):
+##   godot --headless -e --path . -- --loadout-smoke=selfnew
+##   a package that adds a class_name used by another script is accepted, one with a script error is refused
 ## Exit code 0 = passed.
 
 const GodotEditorBridge := preload("res://addons/loadout/editor/godot_editor_bridge.gd")
@@ -73,6 +76,8 @@ func run(mode: String) -> bool:
 			await _run_remote()
 		"self":
 			await _run_self()
+		"selfnew":
+			await _run_selfnew()
 		"search":
 			await _run_search()
 		_:
@@ -124,6 +129,8 @@ func _run_dock() -> void:
 		return
 	await _dock_versions()
 	await _dock_update()
+	await _dock_changes()
+	await _dock_restore()
 	await _dock_edit()
 	await _dock_add_dialogs()
 	await _dock_new_addon()
@@ -195,6 +202,57 @@ func _dock_update() -> void:
 		await _screenshot("dock_restart_offer", _confirm)
 		_confirm.get_cancel_button().pressed.emit()
 		await _dialog_closed(_confirm)
+
+
+## A file added by hand makes the plugin Modified; "Show changes…" lists it.
+func _dock_changes() -> void:
+	var notes := "res://addons/fake_a/notes.txt"
+	_write_text(notes, "mine")
+	await _manager.refresh()
+	_expect(_status_of("fake_a") == LoadoutManager.Status.MODIFIED, "an added file makes the plugin Modified")
+	_select_first_plugin()
+	var button := _find_button(_dock, "Show changes")
+	_expect(button != null, "Show changes offered for a modified plugin")
+	if button != null:
+		var alert: AcceptDialog = _dock.get("_alert")
+		button.pressed.emit()
+		await _wait_until(func() -> bool: return alert.visible, 10000)
+		_expect(alert.dialog_text.contains("added: notes.txt"), "the changes name the added file (%s)" % alert.dialog_text)
+		await _screenshot("dock_changes", alert)
+		alert.hide()
+		await _dialog_closed(alert)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(notes))
+	await _manager.refresh()
+	_expect(_status_of("fake_a") == LoadoutManager.Status.OK, "back to OK without the file")
+
+
+## Restore the backup the update made (1.0.0, pinned), then the newer files again from the next backup.
+func _dock_restore() -> void:
+	var dialog: ConfirmationDialog = _dock.get("_backup_dialog")
+	for expected in ["1.0.0", "1.1.0"]:
+		_select_first_plugin()
+		var button := _find_button(_dock, "Restore backup")
+		_expect(button != null, "Restore backup offered once a backup exists")
+		if button == null:
+			return
+		button.pressed.emit()
+		await _wait_until(func() -> bool: return dialog.visible, 5000)
+		var list: ItemList = dialog.get("_list")
+		_expect(list.item_count >= 1 and list.get_item_text(0).begins_with(expected), "newest backup is %s (%s)" % [expected, list.get_item_text(0) if list.item_count > 0 else "none"])
+		await _screenshot("dock_restore_%s" % expected, dialog)
+		(dialog.get("_pin_check") as CheckBox).button_pressed = expected == "1.0.0"
+		dialog.get_ok_button().pressed.emit()
+		await _wait_until(func() -> bool: return not _dock.get("_busy") and _installed_version() == expected, 30000)
+		_expect_running(expected, "restored %s from the dock" % expected)
+		if await _wait_until(func() -> bool: return _confirm.visible, 3000):
+			_confirm.get_cancel_button().pressed.emit()
+			await _dialog_closed(_confirm)
+		await _dialog_closed(dialog)
+	_expect(_status_of("fake_a") == LoadoutManager.Status.OK, "back at 1.1.0, not pinned")
+
+
+func _installed_version() -> String:
+	return _cfg_version("res://addons/fake_a/plugin.cfg")
 
 
 ## Edit the entry: a narrower range, saved to the registry; id and folder stay fixed.
@@ -372,6 +430,48 @@ func _run_self() -> void:
 	_expect(state.lock_entry != null and state.lock_entry.version == loadout_version, "lock records %s" % loadout_version)
 	_expect(EditorInterface.is_plugin_enabled("loadout") and dock.is_inside_tree(), "Loadout enabled and its dock is up")
 	_write_text(report, "passed %s" % loadout_version if _failures.is_empty() else "failed: " + "; ".join(_failures))
+
+
+## Self-update validation in the real editor, on a copy under user:// (res://addons/loadout is not
+## touched): a package that adds a class_name used by another script must be accepted (the new class
+## is not registered yet), a package with a real script error must be refused and change nothing.
+func _run_selfnew() -> void:
+	var base := SMOKE_DIR.path_join("selfnew")
+	Fs.remove_dir(base)
+	var addons := base.path_join("addons")
+	var installed := addons.path_join("loadout")
+	_expect(Fs.copy_dir("res://addons/loadout", installed, Fs.DEFAULT_EXCLUDE) == OK, "copy of the running Loadout")
+	var installer := LoadoutInstaller.new(GodotEditorBridge.new(_tree), addons, base.path_join("backup"), base.path_join("staging"))
+	var entry: LoadoutRegistry.Entry = LoadoutRegistry.parse_entry({ "id": "loadout", "folder": "loadout",
+			"source": { "type": "local", "path": ProjectSettings.globalize_path(installed) } })["entry"]
+
+	var good := _selfnew_package(base.path_join("package_new_class"), "9.9.9", false)
+	var updated: Dictionary = await installer.self_update(entry, LoadoutLocalSource.new(ProjectSettings.globalize_path(good)), "9.9.9")
+	_expect(updated["ok"], "a package adding a class_name is accepted: %s" % updated["error"])
+	_expect(installer.installed_version(entry) == "9.9.9", "the new files are in place: %s" % installer.installed_version(entry))
+	_expect(FileAccess.file_exists(installed.path_join("core/smoke_new_class.gd")), "the new class file was copied")
+
+	var bad := _selfnew_package(base.path_join("package_broken"), "9.9.10", true)
+	var refused: Dictionary = await installer.self_update(entry, LoadoutLocalSource.new(ProjectSettings.globalize_path(bad)), "9.9.10")
+	_expect(not refused["ok"], "a package with a script error is refused")
+	_expect(installer.installed_version(entry) == "9.9.9", "nothing changed after the refusal: %s" % installer.installed_version(entry))
+	_expect(not FileAccess.file_exists(installed.path_join("core/smoke_broken.gd")), "the broken script was not copied")
+	Fs.remove_dir(base)
+
+
+## The running Loadout plus a new class and a script that uses it; broken adds a script with an error.
+func _selfnew_package(dir: String, version: String, broken: bool) -> String:
+	Fs.copy_dir("res://addons/loadout", dir, Fs.DEFAULT_EXCLUDE)
+	var cfg := ConfigFile.new()
+	cfg.load(dir.path_join("plugin.cfg"))
+	cfg.set_value("plugin", "version", version)
+	cfg.save(dir.path_join("plugin.cfg"))
+	_write_text(dir.path_join("core/smoke_new_class.gd"), "@tool\nclass_name LoadoutSmokeNewClass\nextends RefCounted\n")
+	_write_text(dir.path_join("core/smoke_new_user.gd"),
+			"@tool\nextends RefCounted\nfunc make() -> Variant:\n\tvar thing: LoadoutSmokeNewClass = LoadoutSmokeNewClass.new()\n\treturn thing\n")
+	if broken:
+		_write_text(dir.path_join("core/smoke_broken.gd"), "@tool\nextends RefCounted\nfunc f() -> int:\n\treturn missing_name\n")
+	return dir
 
 
 ## Asset Store search through the real dialog and network (read-only request).

@@ -52,3 +52,10 @@ func test_fetch_other_version_fails() -> void:
 	var result: Dictionary = await _source(FIXTURE).fetch("1.0.0", dest)
 	check(not result["ok"], "local source only has its current version")
 	check(not DirAccess.dir_exists_absolute(dest), "nothing copied")
+
+
+func test_trim_notes_cuts_long_text_and_accepts_null() -> void:
+	check_eq(LocalSource.trim_notes(null), "", "null is empty")
+	check_eq(LocalSource.trim_notes("short"), "short", "short text is kept")
+	check_eq(LocalSource.trim_notes("abcdef", 3), "abc…", "long text is cut")
+

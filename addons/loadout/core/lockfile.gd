@@ -11,6 +11,7 @@ const JsonStore := preload("../util/json_store.gd")
 const SCHEMA := 1
 const DEFAULT_PATH := "res://loadout.lock.json"
 const HASH_PREFIX := "sha256:"
+const ENTRY_KEYS: PackedStringArray = ["version", "pinned", "hash", "installed_at"]
 
 
 class Entry:
@@ -20,13 +21,19 @@ class Entry:
 	var folder_hash: String = ""
 	## ISO date (YYYY-MM-DD).
 	var installed_at: String = ""
+	## Fields this version does not know (written by a newer Loadout), kept when saving.
+	var extra: Dictionary = {}
 
 	func to_dict() -> Dictionary:
-		return { "version": version, "pinned": pinned, "hash": folder_hash, "installed_at": installed_at }
+		var data := extra.duplicate(true)
+		data.merge({ "version": version, "pinned": pinned, "hash": folder_hash, "installed_at": installed_at }, true)
+		return data
 
 
 var plugins: Dictionary[String, Entry] = {}
 var ignored: PackedStringArray = []
+## Top-level fields this version does not know, kept when saving.
+var extra: Dictionary = {}
 ## Problems found while parsing, for the dock.
 var warnings: PackedStringArray = []
 
@@ -44,6 +51,9 @@ static func from_dict(data: Variant) -> Dictionary:
 	if typeof(raw_ignored) != TYPE_ARRAY:
 		return { "ok": false, "error": "\"ignored\" in the lock must be a list.", "lockfile": null }
 	var lock := LoadoutLockfile.new()
+	for key: Variant in data:
+		if key != "schema" and key != "plugins" and key != "ignored":
+			lock.extra[key] = data[key]
 	for id: Variant in raw_plugins:
 		var parsed := _parse_entry(str(id), raw_plugins[id])
 		if parsed["ok"]:
@@ -62,16 +72,8 @@ static func from_dict(data: Variant) -> Dictionary:
 static func load_file(path: String = DEFAULT_PATH) -> Dictionary:
 	var read := JsonStore.read(path, SCHEMA)
 	var result := { "ok": false, "error": read["error"], "lockfile": null, "missing": read["missing"], "backup_path": read["backup_path"] }
-	if not read["ok"]:
-		return result
-	if read["missing"]:
-		result["ok"] = true
-		result["lockfile"] = LoadoutLockfile.new()
-		return result
-	var parsed := from_dict(read["data"])
-	result["ok"] = parsed["ok"]
-	result["error"] = parsed["error"]
-	result["lockfile"] = parsed["lockfile"]
+	if read["ok"]:
+		result.merge({ "ok": true, "error": "", "lockfile": LoadoutLockfile.new() } if read["missing"] else from_dict(read["data"]), true)
 	return result
 
 
@@ -86,7 +88,9 @@ func to_dict() -> Dictionary:
 		raw_plugins[id] = plugins[id].to_dict()
 	var sorted_ignored := ignored.duplicate()
 	sorted_ignored.sort()
-	return { "schema": SCHEMA, "plugins": raw_plugins, "ignored": Array(sorted_ignored) }
+	var data := extra.duplicate(true)
+	data.merge({ "schema": SCHEMA, "plugins": raw_plugins, "ignored": Array(sorted_ignored) }, true)
+	return data
 
 
 func get_entry(id: String) -> Entry:
@@ -148,6 +152,9 @@ static func _parse_entry(id: String, data: Variant) -> Dictionary:
 	entry.pinned = pinned
 	entry.folder_hash = folder_hash
 	entry.installed_at = installed_at
+	for key: Variant in data:
+		if not ENTRY_KEYS.has(key):
+			entry.extra[key] = data[key]
 	return { "ok": true, "error": "", "entry": entry }
 
 

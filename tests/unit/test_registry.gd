@@ -141,7 +141,12 @@ func test_corrupt_file_is_backed_up_not_overwritten() -> void:
 	check(FileAccess.file_exists(path + ".bak"), "backup created")
 	check_eq(FileAccess.get_file_as_string(path + ".bak"), "{ \"schema\": 1, \"plugins\": [ ", "backup has original content")
 	Registry.load_file(path)
-	check(FileAccess.file_exists(path + ".1.bak"), "second backup does not overwrite the first")
+	check(not FileAccess.file_exists(path + ".1.bak"), "reading the same damaged file again does not add a backup")
+	write_text(path, "{ \"schema\": 1, ")
+	Registry.load_file(path)
+	check_eq(FileAccess.get_file_as_string(path + ".bak"), "{ \"schema\": 1, \"plugins\": [ ", "other damaged content does not overwrite the first backup")
+	check(FileAccess.file_exists(path + ".1.bak"), "it gets its own backup")
+	write_text(path, "{ \"schema\": 1, \"plugins\": [ ")
 	var empty: Registry = Registry.from_dict({ "schema": 1, "plugins": [] })["registry"]
 	check(empty.save_file(path) != OK, "save refuses to overwrite a corrupt file")
 	check_eq(FileAccess.get_file_as_string(path), "{ \"schema\": 1, \"plugins\": [ ", "original untouched")
@@ -220,3 +225,12 @@ func test_merge_adds_only_new_ids() -> void:
 	check(summary["skipped"].has("a"), "existing id skipped")
 	check(summary["skipped"].has("d"), "folder clash skipped")
 	check_eq(registry.entries.size(), 3, "entries")
+
+
+func test_prereleases_flag() -> void:
+	var entry: Registry.Entry = Registry.parse_entry({ "id": "x", "source": { "type": "github", "repo": "a/b" }, "prereleases": true })["entry"]
+	check(entry.prereleases, "read")
+	check_eq(entry.to_dict().get("prereleases"), true, "written when on")
+	var plain: Registry.Entry = Registry.parse_entry({ "id": "x", "source": { "type": "github", "repo": "a/b" } })["entry"]
+	check(not plain.to_dict().has("prereleases"), "not written when off")
+	check(not Registry.parse_entry({ "id": "x", "source": { "type": "github", "repo": "a/b" }, "prereleases": "yes" })["ok"], "must be a boolean")
