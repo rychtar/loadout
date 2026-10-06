@@ -353,6 +353,36 @@ func _dock_starters() -> void:
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(LoadoutLockfile.DEFAULT_PATH))
 	await _manager.refresh()
 	await _dock_hide_starters()
+	await _dock_new_starters()
+
+
+## The dialog opens again by itself only for a starter the editor was never offered.
+func _dock_new_starters() -> void:
+	var settings := EditorInterface.get_editor_settings()
+	var original: Variant = settings.get_setting("loadout/starters_seen")
+	var dialog: ConfirmationDialog = _dock.get("_install_dialog")
+	settings.set_setting("loadout/show_starter_pack", true)
+	settings.set_setting("loadout/starters_seen", PackedStringArray())
+	_expect(_dock.has_new_starters(), "starters nobody was offered are new")
+	_dock.offer_starters(true)
+	await _wait_until(func() -> bool: return dialog.visible, 5000)
+	dialog.hide()
+	await _dialog_closed(dialog)
+	_expect(not _dock.has_new_starters(), "after the offer they count as seen")
+	var pack_path := SMOKE_DIR.path_join("starter_pack_grown.json")
+	var starters: Array = LoadoutStarterPack.load_file()["items"].map(func(item: Dictionary) -> Dictionary:
+		var entry: Dictionary = item["entry"].duplicate()
+		entry.merge({ "title": item["title"], "description": item["description"] })
+		return entry)
+	starters.append({ "id": "brand_new", "folder": "brand_new", "source": { "type": "store", "asset": "someone/brand-new" }, "title": "Brand New", "description": "Added later." })
+	_write_text(pack_path, JSON.stringify({ "schema": 1, "starters": starters }))
+	_manager.starter_pack_path = pack_path
+	_expect(_dock.has_new_starters(), "a starter added to the pack opens the dialog again")
+	settings.set_setting("loadout/show_starter_pack", false)
+	_expect(not _dock.has_new_starters(), "but not for someone who switched the pack off")
+	settings.set_setting("loadout/show_starter_pack", true)
+	_manager.starter_pack_path = LoadoutStarterPack.DEFAULT_PATH
+	settings.set_setting("loadout/starters_seen", original)
 
 
 ## The "Hide the starter pack" checkbox turns it off for good, the menu brings it back.

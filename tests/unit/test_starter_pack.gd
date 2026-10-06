@@ -249,3 +249,12 @@ func test_adding_a_starter_offline_still_works() -> void:
 	await manager.refresh()
 	var summary: Dictionary = await manager.add_starters(PackedStringArray(["one"]))
 	check_eq(summary["added"], PackedStringArray(["one"]), "offline is no reason to refuse, the install reports it")
+
+
+func test_pack_ids_list_every_starter_even_those_in_the_registry() -> void:
+	var manager := _manager([_starter("one"), _starter("two")], [
+		{ "id": "one", "folder": "one", "source": { "type": "store", "asset": "pub/one" } },
+	])
+	check_eq(manager.starter_pack_ids(), PackedStringArray(["one", "two"]), "the whole pack, so a later addition can be told from what was offered")
+	manager.starter_pack_path = root.path_join("none.json")
+	check(manager.starter_pack_ids().is_empty(), "an unreadable pack lists nothing")

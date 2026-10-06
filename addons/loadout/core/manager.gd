@@ -423,6 +423,15 @@ func add_registry_entry(data: Dictionary, take_over: bool = false) -> String:
 	return ""
 
 
+## Ids of every starter in the starter pack file ([] when it cannot be read).
+func starter_pack_ids() -> PackedStringArray:
+	var ids: PackedStringArray = []
+	var pack := LoadoutStarterPack.load_file(starter_pack_path)
+	for item: Dictionary in pack["items"]:
+		ids.append(item["id"])
+	return ids
+
+
 ## Starters of the starter pack that the registry does not have yet. Reads files only: whether the
 ## store has a release for this Godot is checked when the user opens a starter's details or adds it.
 ## Returns { "ok", "error", "items": [{ "id", "title", "description", "entry" }] }.

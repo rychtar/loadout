@@ -10,8 +10,6 @@ const Dock := preload("ui/dock.gd")
 const REGISTRY_FILE := "loadout_registry.json"
 ## Optional GitHub token (raises the API limit). Editor Settings are per user, never in the project.
 const TOKEN_SETTING := "loadout/github_token"
-## Set once the starter plugins were offered on an empty registry, so that happens only once.
-const STARTERS_OFFERED_SETTING := "loadout/starters_offered"
 ## Development only: use another registry file instead of the one in the editor config dir
 ## (the update cache then lives next to it).
 const REGISTRY_ARG_PREFIX := "--loadout-registry="
@@ -87,7 +85,10 @@ func _startup_sync() -> void:
 	if not missing.is_empty():
 		Log.write("Missing in this project: %s" % ", ".join(missing))
 		_dock.offer_missing(missing)
-	_offer_starters_once()
+	elif _manager.errors.is_empty() and _dock.has_new_starters():
+		# A new Loadout (or a first start) with starters this editor was never offered.
+		Log.write("The starter pack has plugins you were not offered yet.")
+		_dock.offer_starters(true)
 	var updates := _manager.update_ids()
 	if not updates.is_empty():
 		var names: PackedStringArray = []
@@ -97,19 +98,6 @@ func _startup_sync() -> void:
 		Log.write("Updates available: %s" % ", ".join(names))
 		EditorInterface.get_editor_toaster().push_toast("Loadout: updates available (%d)" % updates.size(),
 				EditorToaster.SEVERITY_INFO, "%s\nUpdate them in the Loadout dock." % ", ".join(names))
-
-
-## A new Loadout has an empty registry: offer the starter plugins once (the menu has them any time).
-func _offer_starters_once() -> void:
-	var settings := EditorInterface.get_editor_settings()
-	if not _manager.errors.is_empty() or not _manager.registry.entries.is_empty() or not _manager.states.is_empty():
-		return
-	if not Dock.starters_enabled():
-		return
-	if settings.has_setting(STARTERS_OFFERED_SETTING) and settings.get_setting(STARTERS_OFFERED_SETTING):
-		return
-	settings.set_setting(STARTERS_OFFERED_SETTING, true)
-	_dock.offer_starters(true)
 
 
 func _on_filesystem_changed() -> void:
@@ -131,11 +119,11 @@ func _register_settings() -> void:
 		settings.set_setting(Dock.SHOW_STARTERS_SETTING, true)
 	settings.set_initial_value(Dock.SHOW_STARTERS_SETTING, true, false)
 	settings.add_property_info({ "name": Dock.SHOW_STARTERS_SETTING, "type": TYPE_BOOL })
-	# Visible in the Editor Settings, so the first-run offer can be switched on again.
-	if not settings.has_setting(STARTERS_OFFERED_SETTING):
-		settings.set_setting(STARTERS_OFFERED_SETTING, false)
-	settings.set_initial_value(STARTERS_OFFERED_SETTING, false, false)
-	settings.add_property_info({ "name": STARTERS_OFFERED_SETTING, "type": TYPE_BOOL })
+	# The starters already offered; clear it to be offered the starter pack again.
+	if not settings.has_setting(Dock.STARTERS_SEEN_SETTING):
+		settings.set_setting(Dock.STARTERS_SEEN_SETTING, PackedStringArray())
+	settings.set_initial_value(Dock.STARTERS_SEEN_SETTING, PackedStringArray(), false)
+	settings.add_property_info({ "name": Dock.STARTERS_SEEN_SETTING, "type": TYPE_PACKED_STRING_ARRAY })
 
 
 func _registry_path() -> String:

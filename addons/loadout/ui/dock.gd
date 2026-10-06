@@ -32,6 +32,8 @@ const MIN_NAME_COLUMN := 96
 const COLUMN_PADDING := 24
 
 const SHOW_STARTERS_SETTING := "loadout/show_starter_pack"
+## Ids of the starters the user was offered before (a starter that is new to this list opens the dialog again).
+const STARTERS_SEEN_SETTING := "loadout/starters_seen"
 
 const MENU_EXPORT := 0
 const MENU_IMPORT := 1
@@ -134,6 +136,28 @@ static func starters_enabled() -> bool:
 	return not settings.has_setting(SHOW_STARTERS_SETTING) or bool(settings.get_setting(SHOW_STARTERS_SETTING))
 
 
+## Whether the starter pack has a starter this editor was never offered, that the registry lacks and
+## that the user has not switched the pack off for.
+func has_new_starters() -> bool:
+	if not starters_enabled():
+		return false
+	var offers := manager.starter_offers()
+	if not offers["ok"]:
+		return false
+	var seen := seen_starters()
+	for item: Dictionary in offers["items"]:
+		if not seen.has(item["id"]):
+			return true
+	return false
+
+
+static func seen_starters() -> PackedStringArray:
+	var settings := EditorInterface.get_editor_settings()
+	if not settings.has_setting(STARTERS_SEEN_SETTING):
+		return PackedStringArray()
+	return PackedStringArray(settings.get_setting(STARTERS_SEEN_SETTING))
+
+
 func _open_install(ids: PackedStringArray, starter_focus: bool, quiet: bool) -> void:
 	var global_cards := _global_cards(ids)
 	var starter_cards: Variant = null
@@ -144,6 +168,8 @@ func _open_install(ids: PackedStringArray, starter_focus: bool, quiet: bool) -> 
 			for item: Dictionary in offers["items"]:
 				cards.append({ "id": item["id"], "title": item["title"], "description": item["description"] })
 			starter_cards = cards
+			# Whatever the pack holds now counts as offered, only a later addition opens the dialog again.
+			EditorInterface.get_editor_settings().set_setting(STARTERS_SEEN_SETTING, manager.starter_pack_ids())
 		elif not quiet:
 			_show_alert("Starter plugins: %s" % offers["error"])
 	if quiet and global_cards.is_empty() and (starter_cards == null or starter_cards.is_empty()):
