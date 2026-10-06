@@ -12,6 +12,8 @@ const Log := preload("../util/log.gd")
 const SELF_FOLDER := "loadout"
 ## Files listed per kind in changed_files().
 const MAX_DIFF_LINES := 15
+## Releases the details dialog lists.
+const MAX_DETAIL_VERSIONS := 30
 const REGISTRY_UNREADABLE := "The registry cannot be read, nothing changed."
 
 ## Emitted after refresh() and after every action, the dock rebuilds from `states`.
@@ -78,11 +80,17 @@ var loaded := false
 ## True while an install or update runs; other actions are refused meanwhile.
 var busy := false
 
+## Starter pack file (tests use their own).
+var starter_pack_path := LoadoutStarterPack.DEFAULT_PATH
+
 var _source_factory: Callable
 var _registry_ok := false
 var _lock_ok := false
 ## Source of every registry entry from the last refresh (holds the releases install() needs).
 var _sources: Dictionary[String, LoadoutSource] = {}
+## Starters of the last starter_offers(): { id: { "item": Dictionary, "entry", "source": LoadoutSource with
+## its releases once asked (null before), "version": newest installable, "offer": bool } }.
+var _starters: Dictionary[String, Dictionary] = {}
 
 
 ## source_factory: func(entry: LoadoutRegistry.Entry) -> LoadoutSource, defaults to LoadoutSource.create()
@@ -409,12 +417,115 @@ func add_registry_entry(data: Dictionary, take_over: bool = false) -> String:
 	error = await _save_registry()
 	if error != "":
 		return error
-	var entry := registry.get_entry(str(data.get("id", "")))
-	if take_over and _lock_ok and installer.is_installed(entry) and lockfile.get_entry(entry.id) == null:
-		lockfile.set_installed(entry.id, _lockable_version(entry), Fs.hash_dir(installer.target_dir(entry)), _today())
-		_save_lock()
+	if take_over:
+		_take_over(registry.get_entry(str(data.get("id", ""))))
 	await refresh()
 	return ""
+
+
+## Starters of the starter pack that the registry does not have yet. Reads files only: whether the
+## store has a release for this Godot is checked when the user opens a starter's details or adds it.
+## Returns { "ok", "error", "items": [{ "id", "title", "description", "entry" }] }.
+func starter_offers() -> Dictionary:
+	var result := { "ok": false, "error": "", "items": [] as Array[Dictionary] }
+	var loaded := LoadoutRegistry.load_file(registry_path)
+	if not loaded["ok"]:
+		result["error"] = REGISTRY_UNREADABLE
+		return result
+	var pack := LoadoutStarterPack.load_file(starter_pack_path)
+	if not pack["ok"]:
+		result["error"] = pack["error"]
+		return result
+	_starters.clear()
+	for item: Dictionary in pack["items"]:
+		var parsed := LoadoutRegistry.parse_entry(item["entry"])
+		if _in_registry(parsed["entry"], loaded["registry"]):
+			continue
+		result["items"].append(item)
+		_starters[item["id"]] = { "item": item, "entry": parsed["entry"], "source": null, "version": "", "offer": true }
+	result["ok"] = true
+	return result
+
+
+## What the details dialog shows about a plugin of the registry or of the last starter_offers() (asks
+## the store only now, not when the list was built):
+## what it is for (asked from the source) and its releases. Returns { "ok", "error", "id", "title",
+## "warning", "meta": source, "summary", "author", "license", "url", "selected": version that would be installed,
+## "versions": [{ "version", "prerelease", "notes", "url" }] newest first }.
+func plugin_details(id: String) -> Dictionary:
+	var result := { "ok": false, "error": "", "warning": "", "id": id, "title": id, "meta": "", "summary": "", "author": "", "license": "",
+			"url": "", "selected": "", "versions": [] as Array[Dictionary] }
+	var source: LoadoutSource = _sources.get(id)
+	var state := get_state(id)
+	if state != null:
+		result["title"] = state.display_name
+		result["selected"] = state.target_version
+	elif _starters.has(id):
+		await _prepare_starter(id)
+		source = _starters[id]["source"]
+		result["title"] = _starters[id]["item"]["title"]
+		result["summary"] = _starters[id]["item"]["description"]
+		result["selected"] = _starters[id]["version"]
+		if not _starters[id]["offer"]:
+			result["warning"] = "No release of this plugin works with this Godot version."
+	if source == null:
+		result["error"] = "Nothing is known about this plugin."
+		return result
+	result["meta"] = source.describe()
+	for release in source.releases.slice(0, MAX_DETAIL_VERSIONS):
+		result["versions"].append({ "version": release.get("version", ""), "prerelease": release.get("prerelease", false),
+				"notes": release.get("notes", ""), "url": release.get("url", "") })
+	var info: Dictionary = await source.get_info()
+	if info["ok"]:
+		if info["summary"] != "":
+			result["summary"] = info["summary"]
+		result["author"] = info["author"]
+		result["license"] = info["license"]
+		result["url"] = info["url"]
+	elif result["summary"] == "":
+		result["error"] = info["error"]
+	result["ok"] = true
+	return result
+
+
+## Adds the starters with these ids to the registry (nothing is installed here). A starter whose
+## folder is already in the project is taken over like "Add to registry…" does.
+## Returns { "ok", "error", "added": PackedStringArray, "skipped": { id: reason } }.
+func add_starters(ids: PackedStringArray) -> Dictionary:
+	var summary := { "ok": false, "error": "", "added": PackedStringArray(), "skipped": {} }
+	if not _reload_registry():
+		summary["error"] = REGISTRY_UNREADABLE
+		return summary
+	var pack := LoadoutStarterPack.load_file(starter_pack_path)
+	if not pack["ok"]:
+		summary["error"] = pack["error"]
+		return summary
+	var entries: Dictionary[String, Dictionary] = {}
+	for item: Dictionary in pack["items"]:
+		entries[item["id"]] = item["entry"]
+	for id in ids:
+		if not entries.has(id):
+			summary["skipped"][id] = "not in the starter pack"
+			continue
+		var check: Dictionary = await _check_starter(LoadoutRegistry.parse_entry(entries[id])["entry"])
+		if not check["offer"]:
+			summary["skipped"][id] = "no release for this Godot version"
+			continue
+		var error := registry.add_entry(entries[id])
+		if error != "":
+			summary["skipped"][id] = error
+		else:
+			summary["added"].append(id)
+	if not summary["added"].is_empty():
+		var error := await _save_registry()
+		if error != "":
+			summary["error"] = error
+			return summary
+		for id in summary["added"]:
+			_take_over(registry.get_entry(id))
+	summary["ok"] = true
+	await refresh()
+	return summary
 
 
 ## Replaces source, version range and auto_install of a registry entry; id and folder stay (a new
@@ -738,6 +849,50 @@ func _scan_unregistered() -> Array[Dictionary]:
 		})
 	found.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a["name"].naturalnocasecmp_to(b["name"]) < 0)
 	return found
+
+
+## Records the files already in the project in the lock as installed (nothing is copied or toggled).
+func _take_over(entry: LoadoutRegistry.Entry) -> void:
+	if _lock_ok and installer.is_installed(entry) and lockfile.get_entry(entry.id) == null:
+		lockfile.set_installed(entry.id, _lockable_version(entry), Fs.hash_dir(installer.target_dir(entry)), _today())
+		_save_lock()
+
+
+## Whether the registry has this plugin already: same id, same folder or same source.
+func _in_registry(candidate: LoadoutRegistry.Entry, in_registry: LoadoutRegistry = null) -> bool:
+	for entry in (in_registry if in_registry != null else registry).entries:
+		if entry.id == candidate.id or entry.folder.to_lower() == candidate.folder.to_lower():
+			return true
+		for key in ["asset", "repo", "path", "asset_id"]:
+			if candidate.source.has(key) and entry.source.get("type") == candidate.source.get("type") \
+					and entry.source.get(key) == candidate.source[key]:
+				return true
+	return false
+
+
+## Asks the source of a starter for its releases once (details dialog).
+func _prepare_starter(id: String) -> void:
+	var starter: Dictionary = _starters[id]
+	if starter["source"] != null:
+		return
+	var check: Dictionary = await _check_starter(starter["entry"])
+	starter["source"] = check["source"]
+	starter["version"] = check["version"]
+	starter["offer"] = check["offer"]
+
+
+## { "offer": bool, "version": String, "source": LoadoutSource }: offer is false only when the source
+## answers and has no release this entry's range accepts; version is "" when the source cannot be asked.
+func _check_starter(entry: LoadoutRegistry.Entry) -> Dictionary:
+	var source: LoadoutSource = _source_factory.call(entry)
+	if source == null:
+		return { "offer": false, "version": "", "source": null }
+	var listed: Dictionary = await source.list_releases()
+	if not listed["ok"]:
+		return { "offer": true, "version": "", "source": source }
+	source.releases.assign(listed["releases"])
+	var latest: Dictionary = await source.get_latest_version(entry.version_range, entry.prereleases)
+	return { "offer": latest["ok"], "version": latest["version"], "source": source }
 
 
 ## Version of the files in the project for the lock. A plugin.cfg without a valid version would

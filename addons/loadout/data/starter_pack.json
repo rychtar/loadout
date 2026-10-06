@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "starters": [
+    {
+      "id": "gdscript_templates",
+      "folder": "gdscript-templates",
+      "source": { "type": "store", "asset": "rumys/gdscript-templates" },
+      "title": "GDScript Templates",
+      "description": "Code snippets for the script editor: type a keyword, press Ctrl+E and it expands into code."
+    },
+    {
+      "id": "godit",
+      "folder": "godit",
+      "source": { "type": "store", "asset": "rumys/godit" },
+      "title": "Godit",
+      "description": "A git client inside the editor: stage and commit, switch branches, browse the history as a graph."
+    },
+    {
+      "id": "script_ide",
+      "folder": "script-ide",
+      "source": { "type": "store", "asset": "maran23/script-ide" },
+      "title": "Script-IDE",
+      "description": "Turns the script editor into an IDE: multiline tabs, an outline of all members, quick search."
+    }
+  ]
+}
