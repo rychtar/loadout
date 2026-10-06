@@ -47,6 +47,11 @@ func get_plugin_name() -> String:
 	return str(_read_cfg().get_value("plugin", "name", ""))
 
 
+func get_info() -> Dictionary:
+	var cfg := _read_cfg()
+	return info_result(str(cfg.get_value("plugin", "description", "")), str(cfg.get_value("plugin", "author", "")))
+
+
 func fetch(version: String, dest_dir: String) -> Dictionary:
 	var current := _current_version()
 	if current != version:

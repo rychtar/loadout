@@ -120,3 +120,11 @@ func test_search() -> void:
 	var empty: Dictionary = await AssetlibSource.search(http, "  ", "4.5")
 	check(not empty["ok"], "empty query is not sent")
 	check_eq(http.requests.size(), 1, "only one request")
+
+
+func test_info_comes_from_the_asset() -> void:
+	_setup()
+	http.respond_json(ASSET_URL, _asset({ "cost": "MIT" }))
+	var info: Dictionary = await source.get_info()
+	check(info["ok"], "ok: %s" % info["error"])
+	check_eq([info["summary"], info["author"], info["license"]], ["Popis assetu.", "someone", "MIT"], "info")

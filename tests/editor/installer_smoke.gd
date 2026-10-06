@@ -133,6 +133,7 @@ func _run_dock() -> void:
 	await _dock_restore()
 	await _dock_edit()
 	await _dock_add_dialogs()
+	await _dock_starters()
 	await _dock_new_addon()
 	# Cleanup: leave the project and the registry file as they were (no fake_a, no lock).
 	_write_text(_registry_path, _original_registry)
@@ -303,6 +304,131 @@ func _dock_add_dialogs() -> void:
 	await _dialog_closed(_registry_dialog)
 	await _installer.uninstall(_entry)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(LoadoutLockfile.DEFAULT_PATH))
+
+
+## The starter plugins dialog (a canned pack with a local source, no network): choose, add to the
+## registry, then the install offer follows.
+func _dock_starters() -> void:
+	# fake_global is a registry plugin the project lacks (the dialog's first section); fake_a and
+	# fake_extra come from the canned starter pack (the second section).
+	_write_text(_registry_path, JSON.stringify({ "schema": 1, "plugins": [{
+		"id": "fake_global", "folder": "fake_global", "source": { "type": "local", "path": _fixture("1.1.0") } }] }))
+	await _manager.refresh()
+	var pack_path := SMOKE_DIR.path_join("starter_pack.json")
+	_write_text(pack_path, JSON.stringify({ "schema": 1, "starters": [{
+		"id": "fake_a", "folder": "fake_a", "source": { "type": "local", "path": _fixture("1.0.0") },
+		"title": "Fake A", "description": "A plugin for the smoke test." }, {
+		"id": "fake_extra", "folder": "fake_extra", "source": { "type": "local", "path": _fixture("1.1.0") },
+		"title": "Fake Extra", "description": "A second starter with a longer description, so the card has to wrap its text over more than one line in the dialog." }] }))
+	_manager.starter_pack_path = pack_path
+	var dialog: ConfirmationDialog = _dock.get("_install_dialog")
+	_dock.offer_starters()
+	var shown: bool = await _wait_until(func() -> bool: return dialog.visible, 5000)
+	_expect(shown, "the install dialog opens with both sections")
+	if not shown:
+		_manager.starter_pack_path = LoadoutStarterPack.DEFAULT_PATH
+		return
+	await _screenshot("dock_starters", dialog)
+	var list: Control = dialog.get("_list")
+	_expect(list.call("has_items", "global") and list.call("has_items", "starter"), "global plugins and starter pack are separate sections")
+	_expect(list.call("selected", "starter").is_empty(), "no starter is on the install list by default")
+	_expect(list.call("selected", "global") == PackedStringArray(["fake_global"]), "the missing global plugin starts on the install list")
+	await _dock_details(dialog)
+	list.call("set_all", "global", false)
+	list.call("set_checked", "fake_a", true)
+	dialog.get_ok_button().pressed.emit()
+	var installed: bool = await _wait_until(func() -> bool: return _status_of("fake_a") == LoadoutManager.Status.OK, 30000)
+	_expect(installed, "the chosen starter is added to the registry and installed")
+	await _wait_until(func() -> bool: return not _dock.get("_busy"), 10000)
+	_expect(not dialog.visible, "the install dialog closed after the choice")
+	# Installing fake_a 1.0.0 over the leftovers of 1.1.0 can recommend a restart (a removed class_name).
+	if _confirm.visible:
+		_confirm.hide()
+		await _dialog_closed(_confirm)
+	_expect(_manager.registry.get_entry("fake_a") != null, "the starter is in the registry")
+	_expect(_status_of("fake_global") == LoadoutManager.Status.IGNORED, "the unchecked global plugin is ignored in this project")
+	_manager.starter_pack_path = LoadoutStarterPack.DEFAULT_PATH
+	_write_text(_registry_path, JSON.stringify({ "schema": 1, "plugins": [] }))
+	await _installer.uninstall(_entry)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(LoadoutLockfile.DEFAULT_PATH))
+	await _manager.refresh()
+	await _dock_hide_starters()
+	await _dock_new_starters()
+
+
+## The dialog opens again by itself only for a starter the editor was never offered.
+func _dock_new_starters() -> void:
+	var settings := EditorInterface.get_editor_settings()
+	var original: Variant = settings.get_setting("loadout/starters_seen")
+	var dialog: ConfirmationDialog = _dock.get("_install_dialog")
+	settings.set_setting("loadout/show_starter_pack", true)
+	settings.set_setting("loadout/starters_seen", PackedStringArray())
+	_expect(_dock.has_new_starters(), "starters nobody was offered are new")
+	_dock.offer_starters(true)
+	await _wait_until(func() -> bool: return dialog.visible, 5000)
+	dialog.hide()
+	await _dialog_closed(dialog)
+	_expect(not _dock.has_new_starters(), "after the offer they count as seen")
+	var pack_path := SMOKE_DIR.path_join("starter_pack_grown.json")
+	var starters: Array = LoadoutStarterPack.load_file()["items"].map(func(item: Dictionary) -> Dictionary:
+		var entry: Dictionary = item["entry"].duplicate()
+		entry.merge({ "title": item["title"], "description": item["description"] })
+		return entry)
+	starters.append({ "id": "brand_new", "folder": "brand_new", "source": { "type": "store", "asset": "someone/brand-new" }, "title": "Brand New", "description": "Added later." })
+	_write_text(pack_path, JSON.stringify({ "schema": 1, "starters": starters }))
+	_manager.starter_pack_path = pack_path
+	_expect(_dock.has_new_starters(), "a starter added to the pack opens the dialog again")
+	settings.set_setting("loadout/show_starter_pack", false)
+	_expect(not _dock.has_new_starters(), "but not for someone who switched the pack off")
+	settings.set_setting("loadout/show_starter_pack", true)
+	_manager.starter_pack_path = LoadoutStarterPack.DEFAULT_PATH
+	settings.set_setting("loadout/starters_seen", original)
+
+
+## The "Hide the starter pack" checkbox turns it off for good, the menu brings it back.
+func _dock_hide_starters() -> void:
+	var settings := EditorInterface.get_editor_settings()
+	var dialog: ConfirmationDialog = _dock.get("_install_dialog")
+	_dock.offer_starters()
+	await _wait_until(func() -> bool: return dialog.visible, 5000)
+	var list: Control = dialog.get("_list")
+	var cards: Dictionary = list.get("_cards")
+	list.call("set_checked", "godit", true)
+	(dialog.get("_hide_starters_check") as CheckBox).button_pressed = true
+	_expect(not (cards["gdscript_templates"] as Control).visible, "ticking the box hides the starters on the left at once")
+	_expect((cards["godit"] as Control).visible, "a starter already moved to the right stays")
+	_expect(list.call("selected", "starter") == PackedStringArray(["godit"]), "and is still going to be installed")
+	(dialog.get("_hide_starters_check") as CheckBox).button_pressed = false
+	_expect((cards["gdscript_templates"] as Control).visible, "unticking brings them back")
+	(dialog.get("_hide_starters_check") as CheckBox).button_pressed = true
+	dialog.get_cancel_button().pressed.emit()
+	await _dialog_closed(dialog)
+	_expect(settings.get_setting("loadout/show_starter_pack") == false, "closing with the box ticked switches the starter pack off")
+	_dock.offer_missing(PackedStringArray())
+	await _wait_until(func() -> bool: return dialog.visible, 5000)
+	_expect(not (dialog.get("_list") as Control).call("has_items", "starter"), "the dialog no longer lists it")
+	dialog.hide()
+	await _dialog_closed(dialog)
+	_dock.offer_starters()
+	await _wait_until(func() -> bool: return dialog.visible, 5000)
+	_expect(settings.get_setting("loadout/show_starter_pack") == true, "the menu brings the starter pack back")
+	_expect((dialog.get("_list") as Control).call("has_items", "starter"), "with its cards")
+	dialog.hide()
+	await _dialog_closed(dialog)
+
+
+## The Details button of a card: what the plugin is for and the release notes of a version.
+func _dock_details(dialog: ConfirmationDialog) -> void:
+	var details: AcceptDialog = dialog.get("_detail_dialog")
+	dialog.call("_on_details_requested", "fake_a")
+	var summary: Label = details.get("_summary")
+	var loaded: bool = await _wait_until(func() -> bool: return details.visible and summary.text != "Loading…", 5000)
+	_expect(loaded, "the details dialog opens and fills in")
+	await _screenshot("dock_details", details)
+	var versions: OptionButton = details.get("_version_pick")
+	_expect(versions.item_count == 1 and versions.get_item_text(0) == "1.0.0", "the version list has the source's release")
+	details.hide()
+	await _dialog_closed(details)
 
 
 ## A plugin installed outside Loadout (like from Godot's Asset Store): offered, added, taken over.

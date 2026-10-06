@@ -31,9 +31,14 @@ const MIN_NAME_COLUMN := 96
 ## Room a column keeps around its text, in editor-scale pixels.
 const COLUMN_PADDING := 24
 
+const SHOW_STARTERS_SETTING := "loadout/show_starter_pack"
+## Ids of the starters the user was offered before (a starter that is new to this list opens the dialog again).
+const STARTERS_SEEN_SETTING := "loadout/starters_seen"
+
 const MENU_EXPORT := 0
 const MENU_IMPORT := 1
 const MENU_TOKEN := 2
+const MENU_STARTERS := 3
 
 ## Grip on a column border of the plugin list: drag to resize, double-click to fit the content.
 class ColumnGrip extends Control:
@@ -111,20 +116,106 @@ func _exit_tree() -> void:
 			dialog.queue_free()
 
 
-## Called after the startup sync and by "Install missing": lets the user pick which missing
-## plugins to install, the unchecked ones can be ignored in this project.
+## Called after the startup sync and by "Install missing": the plugins missing in this project, with
+## the starter pack next to them unless the user hid it.
 func offer_missing(ids: PackedStringArray) -> void:
-	var items: Array[Dictionary] = []
+	_open_install(ids, false, false)
+
+
+## Opens the install dialog on the starter pack. From the menu (not quiet) this also brings back a
+## starter pack the user hid; the first-run offer is quiet and says nothing when there is nothing to offer.
+func offer_starters(quiet: bool = false) -> void:
+	if not quiet:
+		EditorInterface.get_editor_settings().set_setting(SHOW_STARTERS_SETTING, true)
+	_open_install(manager.missing_ids(), true, quiet)
+
+
+## Whether the starter pack is offered (Editor Settings, Loadout → Show Starter Pack).
+static func starters_enabled() -> bool:
+	var settings := EditorInterface.get_editor_settings()
+	return not settings.has_setting(SHOW_STARTERS_SETTING) or bool(settings.get_setting(SHOW_STARTERS_SETTING))
+
+
+## Whether the starter pack has a starter this editor was never offered, that the registry lacks and
+## that the user has not switched the pack off for.
+func has_new_starters() -> bool:
+	if not starters_enabled():
+		return false
+	var offers := manager.starter_offers()
+	if not offers["ok"]:
+		return false
+	var seen := seen_starters()
+	for item: Dictionary in offers["items"]:
+		if not seen.has(item["id"]):
+			return true
+	return false
+
+
+static func seen_starters() -> PackedStringArray:
+	var settings := EditorInterface.get_editor_settings()
+	if not settings.has_setting(STARTERS_SEEN_SETTING):
+		return PackedStringArray()
+	return PackedStringArray(settings.get_setting(STARTERS_SEEN_SETTING))
+
+
+func _open_install(ids: PackedStringArray, starter_focus: bool, quiet: bool) -> void:
+	var global_cards := _global_cards(ids)
+	var starter_cards: Variant = null
+	if starters_enabled():
+		var offers := manager.starter_offers()
+		if offers["ok"]:
+			var cards: Array[Dictionary] = []
+			for item: Dictionary in offers["items"]:
+				cards.append({ "id": item["id"], "title": item["title"], "description": item["description"] })
+			starter_cards = cards
+			# Whatever the pack holds now counts as offered, only a later addition opens the dialog again.
+			EditorInterface.get_editor_settings().set_setting(STARTERS_SEEN_SETTING, manager.starter_pack_ids())
+		elif not quiet:
+			_show_alert("Starter plugins: %s" % offers["error"])
+	if quiet and global_cards.is_empty() and (starter_cards == null or starter_cards.is_empty()):
+		return
+	_install_dialog.open_for(global_cards, starter_cards, starter_focus)
+
+
+func _on_starters_hidden() -> void:
+	EditorInterface.get_editor_settings().set_setting(SHOW_STARTERS_SETTING, false)
+	EditorInterface.get_editor_toaster().push_toast("Loadout: starter pack hidden", EditorToaster.SEVERITY_INFO,
+			"Bring it back from the ⋮ menu (Starter plugins…) or in Editor Settings → Loadout.")
+
+
+func _global_cards(ids: PackedStringArray) -> Array[Dictionary]:
+	var cards: Array[Dictionary] = []
 	for id in ids:
 		var state := manager.get_state(id)
-		var version := state.target_version if state.target_version != "" else "?"
-		items.append({
+		var installable := state.target_version != ""
+		cards.append({
 			"id": id,
-			"label": "%s %s  (%s)" % [state.display_name, version, _short_source(state.source_label)],
-			"enabled": state.target_version != "",
-			"tooltip": state.message if state.target_version == "" else state.source_label,
+			"title": state.display_name,
+			"version": state.target_version,
+			"enabled": installable,
+			"note": "" if installable else state.message,
 		})
-	_install_dialog.open_for(items)
+	return cards
+
+
+## Adds the chosen starters to the registry, then installs them together with the chosen global plugins.
+func _install_chosen(ids: PackedStringArray, starters: PackedStringArray, ignore: PackedStringArray) -> Dictionary:
+	var to_install := ids.duplicate()
+	var notes: PackedStringArray = []
+	if not starters.is_empty():
+		var added: Dictionary = await manager.add_starters(starters)
+		if not added["ok"]:
+			return { "ok": false, "error": "Adding the starter plugins failed: %s" % added["error"] }
+		var missing := manager.missing_ids()
+		for id in added["added"]:
+			if missing.has(id):
+				to_install.append(id)
+		for id: String in added["skipped"]:
+			notes.append("•  %s skipped: %s" % [id, added["skipped"][id]])
+	var result := await _install_selected(to_install, ignore)
+	if result.get("ok", false) and not notes.is_empty():
+		result["info"] = "\n".join(notes)
+	return result
 
 
 ## Called when plugins appear in addons/ outside Loadout (e.g. installed from Godot's asset store):
@@ -159,6 +250,7 @@ func _build() -> void:
 	popup.add_item("Export registry…", MENU_EXPORT)
 	popup.add_item("Import registry…", MENU_IMPORT)
 	popup.add_separator()
+	popup.add_item("Starter plugins…", MENU_STARTERS)
 	popup.add_item("GitHub token…", MENU_TOKEN)
 	popup.id_pressed.connect(_on_menu)
 	header.add_child(menu)
@@ -252,8 +344,10 @@ func _build() -> void:
 	_import_dialog.file_selected.connect(func(path: String) -> void: _run(_import_registry.bind(path)))
 	base.add_child(_import_dialog)
 	_install_dialog = InstallDialog.new()
-	_install_dialog.install_chosen.connect(func(ids: PackedStringArray, ignore: PackedStringArray) -> void:
-		_run(_install_selected.bind(ids, ignore)))
+	_install_dialog.details_provider = func(id: String) -> Dictionary: return await manager.plugin_details(id)
+	_install_dialog.starters_hidden.connect(_on_starters_hidden)
+	_install_dialog.install_chosen.connect(func(ids: PackedStringArray, starters: PackedStringArray, ignore: PackedStringArray) -> void:
+		_run(_install_chosen.bind(ids, starters, ignore)))
 	base.add_child(_install_dialog)
 	_version_dialog = VersionDialog.new()
 	_version_dialog.version_chosen.connect(func(id: String, version: String, pin: bool) -> void:
@@ -521,6 +615,8 @@ func _on_menu(id: int) -> void:
 			_export_dialog.popup_file_dialog()
 		MENU_IMPORT:
 			_import_dialog.popup_file_dialog()
+		MENU_STARTERS:
+			offer_starters()
 		MENU_TOKEN:
 			_show_alert("A token raises the GitHub API limit from 60 to 5000 requests per hour. A fine-grained token with read access to public repositories is enough.\n\nSet it in Editor → Editor Settings → Loadout → Github Token. It is stored only in this computer's editor settings, never in the project or the log.")
 

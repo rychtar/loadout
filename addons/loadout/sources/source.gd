@@ -78,6 +78,27 @@ func get_release(version: String) -> Dictionary:
 	return {}
 
 
+## What the plugin is for, from the source's own page, for the details dialog. Cached per source.
+## Returns { "ok", "error", "summary": String, "author": String, "license": String, "url": String };
+## the strings are empty when the source does not know them. A failure is only an error, not a reason
+## to hide the plugin.
+func get_info() -> Dictionary:
+	return info_result()
+
+
+## A get_info() answer.
+static func info_result(summary: String = "", author: String = "", license: String = "", url: String = "") -> Dictionary:
+	return { "ok": true, "error": "", "summary": summary.strip_edges(), "author": author, "license": license, "url": url }
+
+
+## A failed get_info() answer.
+static func info_error(error: String) -> Dictionary:
+	var result := info_result()
+	result["ok"] = false
+	result["error"] = error
+	return result
+
+
 ## Plugin name from the source's plugin.cfg, "" when the source does not know it without fetching.
 func get_plugin_name() -> String:
 	return ""

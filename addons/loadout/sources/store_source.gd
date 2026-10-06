@@ -16,6 +16,7 @@ var asset: String
 var folder: String
 var _http: LoadoutHttp
 var _godot_version: String
+var _info: Dictionary = {}
 
 
 func _init(asset_path: String, plugin_folder: String, http: LoadoutHttp, godot_version: String = "") -> void:
@@ -50,7 +51,7 @@ func list_releases(_etag: String = "") -> Dictionary:
 			continue
 		var notes := trim_notes(item.get("notes"))
 		if notes == "":
-			notes = trim_notes(item.get("changes_bbcode"))
+			notes = trim_notes(bbcode_to_text(item.get("changes_bbcode")))
 		list.append({
 			"version": str(version),
 			"tag": tag,
@@ -61,6 +62,22 @@ func list_releases(_etag: String = "") -> Dictionary:
 			"release_id": json_int(item.get("id"), 0),
 		})
 	return { "ok": true, "error": "", "not_modified": false, "etag": "", "releases": list }
+
+
+func get_info() -> Dictionary:
+	if not _info.is_empty():
+		return _info
+	var response: Dictionary = await _http.get_json("%s/assets/%s/" % [API, asset], default_headers())
+	if not response["ok"]:
+		return info_error(response["error"])
+	if response["code"] != 200 or typeof(response["data"]) != TYPE_DICTIONARY:
+		return info_error("The Asset Store answered with code %d." % response["code"])
+	var data: Dictionary = response["data"]
+	var publisher: Dictionary = data.get("publisher", {}) if typeof(data.get("publisher")) == TYPE_DICTIONARY else {}
+	_info = info_result(str(data.get("description", "") if data.get("description") != null else ""),
+			str(publisher.get("name", "")), str(data.get("license_type", "") if data.get("license_type") != null else ""),
+			ASSET_PAGE % asset)
+	return _info
 
 
 func fetch(version: String, dest_dir: String) -> Dictionary:
@@ -83,6 +100,21 @@ func fetch(version: String, dest_dir: String) -> Dictionary:
 		return fetch_error("%s %s has no public download (paid assets are not supported)." % [asset, version])
 	var response: Dictionary = await _download(_http, url)
 	return _save_and_extract(response["body"], folder, dest_dir) if response["ok"] else response
+
+
+## The store writes release notes as BBCode ([ul], [code], [url=…]). Plain text for the dock: list
+## items get a bullet, links keep their address, other tags are dropped.
+static func bbcode_to_text(value: Variant) -> String:
+	var text := "" if value == null else str(value)
+	var tags := RegEx.create_from_string("(?i)\\[/?(?:ul|ol|b|i|u|s|code|codeblock|center|color|font|size|h[1-6]|quote|img)(?:=[^\\]]*)?\\]")
+	var links := RegEx.create_from_string("(?is)\\[url=([^\\]]+)\\](.*?)\\[/url\\]")
+	var bare_links := RegEx.create_from_string("(?is)\\[url\\](.*?)\\[/url\\]")
+	text = links.sub(text, "$2 ($1)", true)
+	text = bare_links.sub(text, "$1", true)
+	text = text.replace("[li]", "• ").replace("[/li]", "")
+	text = tags.sub(text, "", true)
+	var blank_lines := RegEx.create_from_string("\\n{3,}")
+	return blank_lines.sub(text, "\n\n", true).strip_edges()
 
 
 ## Searches free add-ons for the given Godot version ("4.7"). Returns { "ok", "error",

@@ -25,6 +25,7 @@ var repo: String
 var folder: String
 var _http: LoadoutHttp
 var _token_provider: Callable
+var _info: Dictionary = {}
 
 
 ## token_provider: func() -> String, read for every request so a changed setting applies at once.
@@ -46,6 +47,22 @@ func is_remote() -> bool:
 ## The chosen package depends on the plugin folder, so plugins of one repo do not share an entry.
 func cache_key() -> String:
 	return "github:%s#%s" % [repo, folder]
+
+
+func get_info() -> Dictionary:
+	if not _info.is_empty():
+		return _info
+	var response: Dictionary = await _http.get_json("%s/repos/%s" % [API, repo], _api_headers())
+	if not response["ok"]:
+		return info_error(response["error"])
+	if response["code"] != 200 or typeof(response["data"]) != TYPE_DICTIONARY:
+		return info_error(_status_error(response["code"], response["headers"]))
+	var data: Dictionary = response["data"]
+	var license: Dictionary = data.get("license", {}) if typeof(data.get("license")) == TYPE_DICTIONARY else {}
+	var owner: Dictionary = data.get("owner", {}) if typeof(data.get("owner")) == TYPE_DICTIONARY else {}
+	_info = info_result("" if data.get("description") == null else str(data["description"]), str(owner.get("login", "")),
+			str(license.get("spdx_id", "")).replace("NOASSERTION", ""), "https://github.com/%s" % repo)
+	return _info
 
 
 func list_releases(etag: String = "") -> Dictionary:

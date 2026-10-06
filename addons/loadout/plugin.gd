@@ -85,6 +85,10 @@ func _startup_sync() -> void:
 	if not missing.is_empty():
 		Log.write("Missing in this project: %s" % ", ".join(missing))
 		_dock.offer_missing(missing)
+	elif _manager.errors.is_empty() and _dock.has_new_starters():
+		# A new Loadout (or a first start) with starters this editor was never offered.
+		Log.write("The starter pack has plugins you were not offered yet.")
+		_dock.offer_starters(true)
 	var updates := _manager.update_ids()
 	if not updates.is_empty():
 		var names: PackedStringArray = []
@@ -111,6 +115,15 @@ func _register_settings() -> void:
 		settings.set_setting(TOKEN_SETTING, "")
 	settings.set_initial_value(TOKEN_SETTING, "", false)
 	settings.add_property_info({ "name": TOKEN_SETTING, "type": TYPE_STRING, "hint": PROPERTY_HINT_PASSWORD })
+	if not settings.has_setting(Dock.SHOW_STARTERS_SETTING):
+		settings.set_setting(Dock.SHOW_STARTERS_SETTING, true)
+	settings.set_initial_value(Dock.SHOW_STARTERS_SETTING, true, false)
+	settings.add_property_info({ "name": Dock.SHOW_STARTERS_SETTING, "type": TYPE_BOOL })
+	# The starters already offered; clear it to be offered the starter pack again.
+	if not settings.has_setting(Dock.STARTERS_SEEN_SETTING):
+		settings.set_setting(Dock.STARTERS_SEEN_SETTING, PackedStringArray())
+	settings.set_initial_value(Dock.STARTERS_SEEN_SETTING, PackedStringArray(), false)
+	settings.add_property_info({ "name": Dock.STARTERS_SEEN_SETTING, "type": TYPE_PACKED_STRING_ARRAY })
 
 
 func _registry_path() -> String:
