@@ -12,7 +12,8 @@
 ### Fixed
 
 - Removing or replacing a plugin folder no longer follows symlinks: a symlinked addon (or a symlink inside one) is only unlinked and what it points to stays. Symlinked sub folders are not copied or hashed.
-- A Loadout self-update is refused when the new version's scripts do not compile, instead of leaving a broken Loadout after the restart.
+- A Loadout self-update is refused when the new version's scripts do not compile, instead of leaving a broken Loadout after the restart. A script that uses a class the new version adds is not a false alarm: it cannot be checked before the restart and is skipped.
+- "Update all" updates Loadout last. Its update restarts the editor, which used to cut off the plugins that came after it.
 - Two plugins from one GitHub repository (different folders) no longer share the cached release list and download each other's package.
 - Releases flagged as pre-release (GitHub `prerelease`, Asset Store `stable: false`) are no longer offered as the newest version unless the range allows it. Tags that are a single big number (`nightly-20260105`, `build-2024`) are not versions.
 - A backup of the same version is no longer replaced by the next one (`1.0.0`, `1.0.0-2`, …).
