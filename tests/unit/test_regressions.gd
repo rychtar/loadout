@@ -13,6 +13,7 @@ const Installer := preload("res://addons/loadout/core/installer.gd")
 const Registry := preload("res://addons/loadout/core/registry.gd")
 const Lockfile := preload("res://addons/loadout/core/lockfile.gd")
 const Zip_ := preload("res://addons/loadout/util/zip.gd")
+const GodotBridge := preload("res://addons/loadout/editor/godot_editor_bridge.gd")
 
 const FIXTURES := "res://tests/fixtures/addons/fake_a"
 const DAY := 86400
@@ -513,3 +514,33 @@ func test_failed_install_mentions_the_godot_version() -> void:
 	check(not result["ok"], "plugin that does not start is refused")
 	var version := Engine.get_version_info()
 	check(result["error"].contains("Godot %d.%d" % [version["major"], version["minor"]]), "the error names the running Godot: %s" % result["error"])
+
+
+func _bridge_package(name: String, files: Dictionary) -> String:
+	var dir := temp_dir("bridge_" + name)
+	for file_name: String in files:
+		write_text(dir.path_join(file_name), files[file_name])
+	return dir
+
+
+func test_validate_scripts_accepts_a_script_using_a_class_the_package_adds() -> void:
+	var dir := _bridge_package("new_class", {
+		"a.gd": "class_name LoadoutBrandNewThing\nextends RefCounted\n",
+		"b.gd": "extends RefCounted\nfunc make() -> Variant:\n\tvar x: LoadoutBrandNewThing = LoadoutBrandNewThing.new()\n\treturn x\n",
+	})
+	check_eq(GodotBridge.new(null).validate_scripts(dir), OK, "a class that is new in the package is not a broken script")
+
+
+func test_validate_scripts_still_refuses_a_broken_script() -> void:
+	var dir := _bridge_package("broken", {
+		"a.gd": "class_name LoadoutBrandNewThing\nextends RefCounted\n",
+		"b.gd": "extends RefCounted\nfunc make() -> int:\n\treturn missing_name\n",
+	})
+	check_eq(GodotBridge.new(null).validate_scripts(dir), ERR_PARSE_ERROR, "a real error is still refused")
+
+
+func test_new_class_names_skip_known_classes() -> void:
+	var names := GodotBridge.new_class_names(["class_name Old\nextends Node\n", "class_name Fresh extends Node\n"], PackedStringArray(["Old"]))
+	check_eq(names, PackedStringArray(["Fresh"]), "only classes the editor does not know")
+	check_eq(GodotBridge.first_class_used("var x := Fresh.new()", names), "Fresh", "used by name")
+	check_eq(GodotBridge.first_class_used("var x := FreshAir.new()", names), "", "a longer name is not a use")

@@ -10,6 +10,7 @@ const ADDONS_DIR := "res://addons"
 const SCAN_TIMEOUT_MS := 30000
 const SETTLE_FRAMES := 10
 const TEMP_VALIDATE_DIR := "user://loadout_validate"
+const CLASS_NAME_PATTERN := "(?m)^class_name\\s+(\\w+).*$"
 
 var _tree: SceneTree
 
@@ -86,31 +87,66 @@ func validate_plugin(dir: String) -> Error:
 
 
 ## Scripts with a class_name cannot be loaded from a second place ("hides a global script class"),
-## so the check runs on a temporary copy with the class_name lines removed.
+## so the check runs on a temporary copy with the class_name lines removed. A class that is new in
+## this version is not registered yet, so a script that uses it by name cannot compile here; such
+## a script is skipped (it is checked when the editor loads it) instead of refusing the package.
 func validate_scripts(dir: String) -> Error:
 	var copy := TEMP_VALIDATE_DIR.path_join(str(Time.get_ticks_usec()))
 	if Fs.copy_dir(dir, copy) != OK:
 		Fs.remove_dir(copy)
 		return ERR_CANT_CREATE
-	var class_name_line := RegEx.create_from_string("(?m)^class_name\\s+\\w+.*$")
+	var class_name_line := RegEx.create_from_string(CLASS_NAME_PATTERN)
 	var scripts: PackedStringArray = []
+	var sources: Dictionary[String, String] = {}
 	for relative in Fs.list_files(copy):
 		if relative.get_extension() == "gd":
 			var path := copy.path_join(relative)
+			var source := FileAccess.get_file_as_string(dir.path_join(relative))
 			var file := FileAccess.open(path, FileAccess.WRITE)
 			if file == null:
 				continue
-			file.store_string(class_name_line.sub(FileAccess.get_file_as_string(dir.path_join(relative)), "", true))
+			file.store_string(class_name_line.sub(source, "", true))
 			file.close()
 			scripts.append(path)
+			sources[path] = source
+	var known := PackedStringArray()
+	for info: Dictionary in ProjectSettings.get_global_class_list():
+		known.append(str(info["class"]))
+	var new_classes := new_class_names(sources.values(), known)
 	var result: Error = OK
 	for path in scripts:
 		var script := ResourceLoader.load(path, "Script", ResourceLoader.CACHE_MODE_IGNORE) as Script
-		if script == null or not script.can_instantiate():
-			Log.write("Script %s does not compile." % path.trim_prefix(copy + "/"), Log.Level.WARNING)
-			result = ERR_PARSE_ERROR
+		if script != null and script.can_instantiate():
+			continue
+		var relative := path.trim_prefix(copy + "/")
+		var used := first_class_used(sources[path], new_classes)
+		if used != "":
+			Log.write("Script %s uses the new class %s, it cannot be checked before the restart." % [relative, used])
+			continue
+		Log.write("Script %s does not compile." % relative, Log.Level.WARNING)
+		result = ERR_PARSE_ERROR
 	Fs.remove_dir(copy)
 	return result
+
+
+## Names declared with class_name in sources that are not in known (classes this version adds).
+static func new_class_names(sources: Array, known: PackedStringArray) -> PackedStringArray:
+	var declared := RegEx.create_from_string(CLASS_NAME_PATTERN)
+	var names := PackedStringArray()
+	for source: String in sources:
+		for found in declared.search_all(source):
+			var declared_name := found.get_string(1)
+			if not known.has(declared_name) and not names.has(declared_name):
+				names.append(declared_name)
+	return names
+
+
+## The first of names that source mentions as a whole word, "" when none.
+static func first_class_used(source: String, names: PackedStringArray) -> String:
+	for class_name_text in names:
+		if RegEx.create_from_string("\\b%s\\b" % class_name_text).search(source) != null:
+			return class_name_text
+	return ""
 
 
 func save_project_settings() -> Error:
