@@ -4,14 +4,14 @@
 
 ### Added
 
-- **Starter plugins…** (⋮ menu): a short list of plugins most projects can use (GDScript Templates, the Godot Git client Godit, Script-IDE). It opens the install dialog, which has two lists: **Available** on the left (your global plugins that this project lacks, and the **Starter pack**, tagged) and **To install in this project** on the right. Move a plugin with its button or a double-click. A chosen starter is added to your registry and installed in one step. A new Loadout with an empty registry offers the list once. The list is `addons/loadout/data/starter_pack.json`.
-- The checkbox **Hide the starter pack from now on** at the bottom of the dialog switches the starter pack off for good (Editor Settings → Loadout → Show Starter Pack, or ⋮ → Starter plugins… to bring it back).
-- **Details…** on every card: what the plugin is for (from the Asset Store, GitHub, the Asset Library or its `plugin.cfg`) and the release notes of a version picked from a list. The lists themselves make no requests, the details are fetched when you click. A starter with no Asset Store release for your Godot version is skipped when you add it.
+- **Starter plugins…** (⋮ menu): a short list of plugins most projects can use (GDScript Templates, the Godot Git client Godit, Script-IDE). It opens the install dialog with the starter pack next to the plugins your registry says this project lacks. A chosen starter is added to your registry and installed in one step. A new Loadout with an empty registry offers the list once. The list is `addons/loadout/data/starter_pack.json`.
+- The checkbox **Hide the starter pack from now on** at the bottom of the install dialog switches the starter pack off for good (Editor Settings → Loadout → Show Starter Pack, or ⋮ → Starter plugins… to bring it back). Starters you already moved to the install list stay and are installed.
+- **Details…** on every card of the install dialog: what the plugin is for (from the Asset Store, GitHub, the Asset Library or its `plugin.cfg`) and the release notes of a version picked from a list. The lists themselves make no requests, the details are fetched when you click. A starter with no Asset Store release for your Godot version is skipped when you add it.
 
 ### Changed
 
-- The install dialog ("Install plugins") shows plugin cards with **Add all** per section and scrolls when the list is long.
-- Release notes from the Asset Store (BBCode) are shown as plain text instead of raw tags.
+- The install dialog ("Install plugins") has two lists: **Available** on the left (your global plugins that are missing here, then the tagged starters) and **To install in this project** on the right. Move a plugin with its button or a double-click, **Add all** and **Remove all** move everything. Each list scrolls when it is long.
+- Release notes from the Asset Store, which it writes as BBCode, are shown as plain text instead of raw tags (a cached list is converted at the next update check).
 
 ## 0.2.0
 
