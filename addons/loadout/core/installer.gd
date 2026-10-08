@@ -13,6 +13,7 @@ extends RefCounted
 
 const Fs := preload("../util/fs.gd")
 const Log := preload("../util/log.gd")
+const Package := preload("../util/package.gd")
 
 const CONFIRM_MODIFIED := "modified"
 const CONFIRM_PINNED := "pinned"
@@ -26,6 +27,8 @@ signal plugin_installed(id: String, version: String)
 signal plugin_updated(id: String, from_version: String, to_version: String)
 signal plugin_removed(id: String)
 signal install_failed(id: String, error: String)
+
+static var _backup_suffix_regex: RegEx
 
 var editor: LoadoutEditorBridge
 var addons_dir: String
@@ -74,12 +77,15 @@ func check_overwrite(entry: LoadoutRegistry.Entry, lock_entry: LoadoutLockfile.E
 
 ## Installs version of the plugin from source, replacing an installed version.
 ## Returns { "ok", "error", "id", "from", "to", "hash", "backup_path", "restored",
-## "restart_recommended", "needs_confirmation", "load_failed" }. The caller records "hash" in the lock.
+## "restart_recommended", "needs_confirmation", "load_failed", "native" }. The caller records "hash" in the lock.
 ## load_failed: the files were fine but the plugin did not compile or start (often written for
 ## another Godot version), so an older release may work.
+## native: the package holds a GDExtension. Its files are replaced but nothing is enabled, disabled
+## or loaded (code from a native library cannot be swapped in a running editor), so "restart_recommended"
+## is set. "from" is the version in the lock when the folder has no plugin.cfg to say.
 func install(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: String,
 		lock_entry: LoadoutLockfile.Entry = null, force: bool = false, enable: bool = true) -> Dictionary:
-	var result := _new_result(entry, version)
+	var result := _new_result(entry, version, lock_entry)
 	if not force:
 		var reason := check_overwrite(entry, lock_entry)
 		if reason != "":
@@ -105,7 +111,9 @@ func install(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: Strin
 		Log.write(result["warning"], Log.Level.WARNING)
 	_preserve_uids(target_dir(entry), staged)
 
-	if is_installed(entry):
+	if Package.is_native(staged):
+		await _install_native(entry, staged, result)
+	elif is_installed(entry):
 		await _replace(entry, staged, result)
 	else:
 		await _install_fresh(entry, staged, enable, result)
@@ -167,7 +175,7 @@ func self_update(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: S
 
 
 ## Backups of the plugin, newest first: [{ "path", "name" (folder name), "version" (from its
-## plugin.cfg, "" when unknown), "modified" (unix time) }].
+## plugin.cfg, else from the folder name, "" when neither is a version), "modified" (unix time) }].
 func list_backups(entry: LoadoutRegistry.Entry) -> Array[Dictionary]:
 	var list: Array[Dictionary] = []
 	var root := backup_root.path_join(entry.id)
@@ -179,23 +187,27 @@ func list_backups(entry: LoadoutRegistry.Entry) -> Array[Dictionary]:
 		var version := ""
 		if cfg.load(path.path_join("plugin.cfg")) == OK:
 			version = str(cfg.get_value("plugin", "version", ""))
+		if version == "":
+			version = _version_from_backup_name(name)
 		list.append({ "path": path, "name": name, "version": version, "modified": FileAccess.get_modified_time(path) })
 	list.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return a["name"].naturalnocasecmp_to(b["name"]) > 0 if a["modified"] == b["modified"] else a["modified"] > b["modified"])
 	return list
 
 
-## Disables and removes the plugin folder (a backup is kept).
-## Returns { "ok", "error", "id", "backup_path" }.
-func uninstall(entry: LoadoutRegistry.Entry) -> Dictionary:
-	var result := { "ok": false, "error": "", "id": entry.id, "backup_path": "" }
+## Disables and removes the plugin folder (a backup is kept). A folder with native code is only
+## deleted, the loaded library goes away with the next editor restart ("restart_recommended").
+## Returns { "ok", "error", "id", "backup_path", "native", "restart_recommended" }.
+func uninstall(entry: LoadoutRegistry.Entry, lock_entry: LoadoutLockfile.Entry = null) -> Dictionary:
+	var result := { "ok": false, "error": "", "id": entry.id, "backup_path": "", "native": false, "restart_recommended": false }
 	var target := target_dir(entry)
 	if not DirAccess.dir_exists_absolute(target):
 		result["error"] = "Plugin %s is not installed." % entry.id
 		return result
+	var native := Package.is_native(target)
 	if editor.is_plugin_enabled(entry.folder):
 		await editor.set_plugin_enabled(entry.folder, false)
-	var backup := _backup_path(entry, installed_version(entry))
+	var backup := _backup_path(entry, _new_result(entry, "", lock_entry)["from"])
 	var err := _copy_fresh(target, backup)
 	if err == OK:
 		err = Fs.remove_dir(target)
@@ -203,8 +215,13 @@ func uninstall(entry: LoadoutRegistry.Entry) -> Dictionary:
 		result["error"] = "Removing %s failed: %s" % [entry.id, error_string(err)]
 		Log.write(result["error"], Log.Level.ERROR)
 		return result
-	await editor.scan()
-	editor.save_project_settings()
+	if native:
+		# No scan, see _install_native(); the library stays loaded until the editor restarts.
+		result["native"] = true
+		result["restart_recommended"] = true
+	else:
+		await editor.scan()
+		editor.save_project_settings()
 	result["ok"] = true
 	result["backup_path"] = backup
 	Log.write("Removed %s, backup in %s." % [entry.id, backup])
@@ -212,8 +229,8 @@ func uninstall(entry: LoadoutRegistry.Entry) -> Dictionary:
 	return result
 
 
-## Downloads version into a clean staging folder and checks that it holds a plugin. Returns the
-## fetch() result; on failure "error" is the message and the staging folder is gone.
+## Downloads version into a clean staging folder and checks that it holds a plugin or an extension.
+## Returns the fetch() result; on failure "error" is the message and the staging folder is gone.
 func _stage(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: String) -> Dictionary:
 	var staging := staging_root.path_join(entry.id)
 	Fs.remove_dir(staging)
@@ -222,9 +239,9 @@ func _stage(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: String
 		Fs.remove_dir(staging)
 		fetched["error"] = "Download of %s %s failed: %s" % [entry.id, version, fetched["error"]]
 		return fetched
-	if not FileAccess.file_exists(str(fetched["path"]).path_join("plugin.cfg")):
+	if not Package.is_addon(str(fetched["path"])):
 		Fs.remove_dir(staging)
-		return { "ok": false, "error": "Package %s %s has no plugin.cfg." % [entry.id, version], "path": "" }
+		return { "ok": false, "error": "Package %s %s has no plugin.cfg or .gdextension." % [entry.id, version], "path": "" }
 	return fetched
 
 
@@ -251,6 +268,50 @@ func _install_fresh(entry: LoadoutRegistry.Entry, staged: String, enable: bool, 
 	editor.save_project_settings()
 	result["restart_recommended"] = not editor.stale_classes(target).is_empty()
 	result["ok"] = true
+
+
+## A package with a GDExtension: back up the old files and swap the folder. Nothing is enabled,
+## disabled, scanned or compiled. A loaded native library stays in memory, so the new one runs after
+## a restart; and scanning a new .gdextension makes Godot reload all scripts, which cancels every
+## coroutine in flight (this one and the manager's included), so it is left to the restart.
+## On failure the old files come back. On Windows a loaded library is locked and cannot be replaced.
+func _install_native(entry: LoadoutRegistry.Entry, staged: String, result: Dictionary) -> void:
+	result["native"] = true
+	var target := target_dir(entry)
+	var backup := ""
+	if is_installed(entry):
+		backup = _backup_path(entry, result["from"])
+		var backup_error := _copy_fresh(target, backup)
+		if backup_error != OK:
+			result["error"] = "Backup of %s failed: %s" % [entry.id, error_string(backup_error)]
+			return
+		result["backup_path"] = backup
+	var err := Fs.remove_dir(target)
+	if err == OK:
+		err = Fs.copy_dir(staged, target)
+	if err != OK:
+		result["error"] = "Replacing the files in %s failed: %s." % [target, error_string(err)]
+		result["restored"] = _restore_native(entry, backup)
+		if result["restored"]:
+			result["error"] += " Version %s restored." % result["from"]
+		elif backup != "":
+			result["error"] += " A loaded native library may be locked. Close the editor and copy the backup %s over the folder by hand." % backup
+		return
+	result["restart_recommended"] = true
+	result["ok"] = true
+
+
+## Puts the backup back after a failed native install; a fresh install (no backup) is removed. The
+## backup is copied over what is left, so files that could not be deleted do not stop the restore.
+func _restore_native(entry: LoadoutRegistry.Entry, backup: String) -> bool:
+	var target := target_dir(entry)
+	Fs.remove_dir(target)
+	if backup == "":
+		return false
+	var err := Fs.copy_dir(backup, target)
+	if err != OK:
+		Log.write("Restoring %s from %s failed: %s" % [entry.id, backup, error_string(err)], Log.Level.ERROR)
+	return err == OK
 
 
 func _replace(entry: LoadoutRegistry.Entry, staged: String, result: Dictionary) -> void:
@@ -360,6 +421,17 @@ func _preserve_uids(target: String, staged: String) -> void:
 		DirAccess.copy_absolute(target.path_join(relative), staged.path_join(relative))
 
 
+## The version a backup folder is named after ("1.0.0", "1.0.0-2" for a second backup of it), "" when
+## the name is not a version. Used for a package that has no plugin.cfg to say.
+func _version_from_backup_name(folder_name: String) -> String:
+	if _backup_suffix_regex == null:
+		_backup_suffix_regex = RegEx.create_from_string("-\\d+$")
+	for candidate in [_backup_suffix_regex.sub(folder_name, ""), folder_name]:
+		if LoadoutVersion.parse(candidate) != null:
+			return candidate
+	return ""
+
+
 ## A folder for the backup of version that does not exist yet, so an earlier backup of the same
 ## version (e.g. with other manual edits) is never replaced: "1.0.0", "1.0.0-2", "1.0.0-3", ...
 func _backup_path(entry: LoadoutRegistry.Entry, version: String) -> String:
@@ -410,11 +482,15 @@ func _godot_hint() -> String:
 	return " It may not support Godot %d.%d, which is running now." % [version["major"], version["minor"]]
 
 
-func _new_result(entry: LoadoutRegistry.Entry, version: String) -> Dictionary:
+## lock_entry names the installed version when the folder has no plugin.cfg to say (an extension).
+func _new_result(entry: LoadoutRegistry.Entry, version: String, lock_entry: LoadoutLockfile.Entry = null) -> Dictionary:
+	var installed := installed_version(entry)
+	if installed == "" and lock_entry != null and is_installed(entry):
+		installed = lock_entry.version
 	return {
-		"ok": false, "error": "", "id": entry.id, "from": installed_version(entry), "to": version,
+		"ok": false, "error": "", "id": entry.id, "from": installed, "to": version,
 		"hash": "", "backup_path": "", "restored": false, "restart_recommended": false, "needs_confirmation": "",
-		"warning": "", "package_folder": "", "load_failed": false,
+		"warning": "", "package_folder": "", "load_failed": false, "native": false,
 	}
 
 

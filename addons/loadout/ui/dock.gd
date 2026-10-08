@@ -596,7 +596,10 @@ func _confirm_update(state: LoadoutManager.PluginState) -> void:
 		return
 	var text := "Update %s %s → %s?" % [state.display_name, state.installed_version, state.target_version]
 	text += _notes_text(state)
-	text += "\n\nThe plugin is disabled, the old version is backed up to %s, the files are replaced and the plugin is enabled again. If the new version does not start, Loadout restores %s." % [backup, state.installed_version]
+	if state.native:
+		text += "\n\nThe old version is backed up to %s and the files are replaced. The plugin contains native code, which the editor only loads at startup, so the new version runs after you restart the editor." % backup
+	else:
+		text += "\n\nThe plugin is disabled, the old version is backed up to %s, the files are replaced and the plugin is enabled again. If the new version does not start, Loadout restores %s." % [backup, state.installed_version]
 	_ask(text, "Update", func() -> Dictionary: return await manager.install(state.id), "Not now")
 
 
@@ -767,7 +770,7 @@ func _handle_result(result: Variant) -> void:
 
 
 func _offer_restart() -> void:
-	_ask("The new version removed some classes (class_name). The editor keeps listing them until it restarts. Restart now?",
+	_ask("The editor has to restart for the change to take effect (a plugin with native code is loaded at startup, or the new version removed some classes). Restart now?",
 			"Restart editor", func() -> void: EditorInterface.restart_editor(true))
 
 

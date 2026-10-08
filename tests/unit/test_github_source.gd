@@ -219,3 +219,40 @@ func test_info_without_description_or_license() -> void:
 	http.respond_json("https://api.github.com/repos/owner/fake-a", { "description": null, "license": { "spdx_id": "NOASSERTION" } })
 	var info: Dictionary = await source.get_info()
 	check(info["ok"] and info["summary"] == "" and info["license"] == "", "empty, not 'null' or NOASSERTION")
+
+
+func test_godot_style_tags() -> void:
+	_setup()
+	http.respond_json(RELEASES_URL, [
+		_release("v2.5.stable"), _release("v2.5.1.rc2", { "prerelease": true }), _release("v2.6.dev2", { "prerelease": true }),
+		_release("v2.4.4.stable"), _release("v2.4.final"),
+	])
+	var result := await _list()
+	var versions: PackedStringArray = []
+	for release: Dictionary in result["releases"]:
+		versions.append(release["version"])
+	check_eq(versions, PackedStringArray(["2.5.0", "2.5.1-rc.2", "2.6.0-dev.2", "2.4.4"]), "Godot-style tags, an unknown stage is skipped")
+	source.releases.assign(result["releases"])
+	var latest: Dictionary = await source.get_latest_version("^2.0.0")
+	check_eq(latest["version"], "2.5.0", "the stable release is the latest, not the candidate")
+	var with_candidates: Dictionary = await source.get_latest_version("^2.0.0", true)
+	check_eq(with_candidates["version"], "2.6.0-dev.2", "snapshots with the opt-in")
+
+
+func test_demo_asset_is_not_the_plugin() -> void:
+	_setup()
+	http.respond_json(RELEASES_URL, [_release("v1.1.0", { "assets": [
+		{ "name": "godot-fake_a-demo-v1.1.0.zip", "browser_download_url": "https://example.com/demo.zip" },
+		{ "name": "godot-fake_a-v1.1.0-plugin.zip", "browser_download_url": "https://example.com/plugin.zip" },
+	] })])
+	var result := await _list()
+	check_eq(result["releases"][0]["download_url"], "https://example.com/plugin.zip", "a demo project is not the addon")
+
+
+func test_only_a_demo_asset_is_still_used() -> void:
+	_setup()
+	http.respond_json(RELEASES_URL, [_release("v1.1.0", { "assets": [
+		{ "name": "fake_a-demo.zip", "browser_download_url": "https://example.com/demo.zip" },
+	] })])
+	var result := await _list()
+	check_eq(result["releases"][0]["download_url"], "https://example.com/demo.zip", "better than the source zip when it is the only asset named after the plugin")

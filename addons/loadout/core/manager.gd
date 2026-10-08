@@ -7,6 +7,7 @@ extends RefCounted
 
 const Fs := preload("../util/fs.gd")
 const Log := preload("../util/log.gd")
+const Package := preload("../util/package.gd")
 
 ## Loadout's own folder: it can be updated (installer.self_update + editor restart), never removed.
 const SELF_FOLDER := "loadout"
@@ -53,6 +54,8 @@ class PluginState:
 	var message: String = ""
 	## Source could not be checked, cached data used (shown in the dock, never blocks).
 	var warning: String = ""
+	## The folder in the project holds native code (a GDExtension): replaced on disk, active after a restart.
+	var native: bool = false
 	## Release notes and page of target_version (remote sources only).
 	var release_notes: String = ""
 	var release_url: String = ""
@@ -621,6 +624,7 @@ func _compute_state(entry: LoadoutRegistry.Entry, check_updates: bool = false) -
 	state.entry = entry
 	state.lock_entry = lockfile.get_entry(entry.id)
 	state.installed_version = installer.installed_version(entry)
+	state.native = installer.is_installed(entry) and Package.is_native(installer.target_dir(entry))
 	var source: LoadoutSource = _sources.get(entry.id)
 	if source == null:
 		source = _source_factory.call(entry)
@@ -792,11 +796,13 @@ func _describe_diff(state: PluginState, version: String, diff: Dictionary) -> St
 func _uninstall(state: PluginState) -> Dictionary:
 	if state.entry.folder == SELF_FOLDER:
 		return _error_result(state.id, "Loadout cannot remove itself. Disable it in Project Settings → Plugins and delete its folder by hand.")
-	var result: Dictionary = await installer.uninstall(state.entry)
+	var result: Dictionary = await installer.uninstall(state.entry, state.lock_entry)
 	if result["ok"]:
 		lockfile.remove(state.id)
 		lockfile.set_ignored(state.id, true)
 		_save_lock()
+		if result["restart_recommended"]:
+			restart_recommended.emit()
 	await refresh()
 	return result
 
@@ -848,9 +854,12 @@ func _scan_unregistered() -> Array[Dictionary]:
 	for folder in DirAccess.get_directories_at(installer.addons_dir):
 		if folder == SELF_FOLDER or known.has(folder.to_lower()):
 			continue
-		var cfg := ConfigFile.new()
-		if cfg.load(installer.addons_dir.path_join(folder).path_join("plugin.cfg")) != OK:
+		var dir := installer.addons_dir.path_join(folder)
+		if not Package.is_addon(dir):
 			continue
+		# An extension has no plugin.cfg: the missing file leaves the defaults (folder name, no version).
+		var cfg := ConfigFile.new()
+		cfg.load(dir.path_join("plugin.cfg"))
 		found.append({
 			"folder": folder,
 			"name": str(cfg.get_value("plugin", "name", folder)),

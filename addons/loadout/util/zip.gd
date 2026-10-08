@@ -1,7 +1,10 @@
 @tool
 extends RefCounted
 
-## Extracts one plugin folder (the one with plugin.cfg) from a downloaded zip.
+const Package := preload("package.gd")
+
+## Extracts one plugin folder (the one with plugin.cfg, or with a .gdextension when no plugin has a
+## plugin.cfg) from a downloaded zip.
 ## Handles release assets (addons/<folder>/...), GitHub source zips (<repo>-<sha>/addons/<folder>/...)
 ## and zips of the plugin folder itself. Entries escaping the target (../) are refused, and so is
 ## a zip that unpacks to more than MAX_UNPACKED_BYTES (zip bomb).
@@ -58,14 +61,17 @@ static func extract_plugin(zip_path: String, folder: String, dest_dir: String) -
 	return { "ok": true, "error": "", "source_folder": root.trim_suffix("/").get_file() }
 
 
-## Folder prefix inside the zip ("" = zip root) holding the plugin.cfg of the wanted plugin.
+## Folder prefix inside the zip ("" = zip root) holding the plugin.cfg (or, in a package of native
+## code only, the .gdextension) of the wanted plugin.
 static func _plugin_prefix(files: PackedStringArray, folder: String) -> Dictionary:
 	var candidates: PackedStringArray = []
 	for path in files:
 		if path.get_file() == "plugin.cfg":
 			candidates.append(path.get_base_dir())
 	if candidates.is_empty():
-		return { "prefix": "", "error": "The package has no plugin.cfg." }
+		candidates = Package.extension_roots(files)
+	if candidates.is_empty():
+		return { "prefix": "", "error": "The package has no plugin.cfg or .gdextension." }
 	var chosen := ""
 	if candidates.size() == 1:
 		chosen = candidates[0]

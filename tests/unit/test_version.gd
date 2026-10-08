@@ -134,3 +134,34 @@ func test_include_prereleases() -> void:
 	check_eq(LoadoutVersion.max_satisfying(PackedStringArray(["1.2.0", "1.3.0-beta.1", "1.3.0-beta.2"]), "*", true), "1.3.0-beta.2", "newest pre-release wins")
 	check_eq(LoadoutVersion.max_satisfying(PackedStringArray(["1.2.0", "1.3.0", "1.3.0-beta.2"]), "*", true), "1.3.0", "the release beats its pre-releases")
 	check_eq(LoadoutVersion.max_satisfying(PackedStringArray(["1.2.0", "1.3.0-beta.2"]), "*"), "1.2.0", "off: stable only")
+
+
+func test_godot_style_suffixes() -> void:
+	# Godot-style releases such as Orchestrator's: the stage is a dotted word, not a "-prerelease".
+	check_eq(_str("v2.5.stable"), "2.5.0", "stable is the plain release")
+	check_eq(_str("2.4.4.stable"), "2.4.4", "three numbers and stable")
+	check_eq(_str("v2.5.1.rc2"), "2.5.1-rc.2", "release candidate")
+	check_eq(_str("2.6.dev2"), "2.6.0-dev.2", "dev snapshot")
+	check_eq(_str("3.0.beta"), "3.0.0-beta", "stage without a number")
+	check_eq(_str("1.0.alpha3"), "1.0.0-alpha.3", "alpha")
+	check(Version.parse("2.5.stable").precision == 2, "precision is kept")
+
+
+func test_godot_style_suffixes_order() -> void:
+	var order := ["2.5.dev1", "2.5.rc2", "2.5.rc10", "2.5.stable", "2.5.1.rc1", "2.5.1.stable", "2.6.dev1"]
+	for index in order.size() - 1:
+		check(Version.parse(order[index]).compare(Version.parse(order[index + 1])) < 0, "%s < %s" % [order[index], order[index + 1]])
+	check_eq(Version.parse("2.5.stable").compare(Version.parse("2.5.0")), 0, "stable equals the plain version")
+
+
+func test_godot_style_suffixes_in_ranges() -> void:
+	check(Version.satisfies("v2.5.stable", "^2.0.0"), "stable release in a caret range")
+	check(not Version.satisfies("v2.6.dev2", "^2.0.0"), "dev snapshot needs the opt-in")
+	check(Version.satisfies("v2.6.dev2", "^2.0.0", true), "dev snapshot with prereleases")
+	check(not Version.satisfies("v2.5.1.rc2", "^2.0.0"), "release candidate needs the opt-in")
+	check_eq(Version.max_satisfying(PackedStringArray(["2.4.4.stable", "2.5.stable", "2.6.dev1"]), "^2.0.0"), "2.5.stable", "newest stable")
+
+
+func test_godot_style_invalid() -> void:
+	for text: String in ["2.5.final", "2.5.stable.1", "2.5.rc.x", "2.5.1.2.rc1", "2.5.stables", "2.5.RC2x"]:
+		check(Version.parse(text) == null, "'%s' is invalid" % text)

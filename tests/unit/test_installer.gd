@@ -280,3 +280,135 @@ func test_self_update_failed_download_changes_nothing() -> void:
 	var result: Dictionary = await installer.self_update(loadout, source, "9.9.9")
 	check(not result["ok"], "fails")
 	check_eq(Fs.hash_dir(addons.path_join("loadout")), before, "untouched")
+
+
+# --- native add-ons: GDExtension packages, with or without a plugin.cfg ---
+
+const EXT_FIXTURES := "res://tests/fixtures/addons/fake_ext"
+
+var ext_entry: Registry.Entry
+
+
+func _setup_ext(name: String) -> void:
+	_setup(name)
+	source = FakeSource.new({ "1.0.0": EXT_FIXTURES.path_join("1.0.0"), "1.1.0": EXT_FIXTURES.path_join("1.1.0") })
+	ext_entry = Registry.parse_entry({ "id": "fake_ext", "folder": "fake_ext", "source": { "type": "local", "path": "/fixtures/fake_ext" } })["entry"]
+
+
+func _ext_target() -> String:
+	return addons.path_join("fake_ext")
+
+
+## Installs fake_ext 1.0.0 and returns a lock entry matching it (the version lives only in the lock).
+func _install_ext_base() -> Lockfile.Entry:
+	var result: Dictionary = await installer.install(ext_entry, source, "1.0.0")
+	check(result["ok"], "base install: %s" % result["error"])
+	var lock := Lockfile.new()
+	lock.set_installed("fake_ext", "1.0.0", result["hash"], "2026-10-01")
+	editor.calls.clear()
+	events.clear()
+	return lock.get_entry("fake_ext")
+
+
+func test_native_fresh_install_does_not_touch_the_plugin_state() -> void:
+	_setup_ext("native_fresh")
+	var result: Dictionary = await installer.install(ext_entry, source, "1.0.0")
+	check(result["ok"], "ok: %s" % result["error"])
+	check_eq(Fs.hash_dir(_ext_target()), Fs.hash_dir(EXT_FIXTURES.path_join("1.0.0")), "all files copied")
+	check_eq(result["hash"], Fs.hash_dir(_ext_target()), "hash of the installed folder")
+	check_eq(editor.calls, PackedStringArray(), "no editor call at all: a scan of a new .gdextension reloads every script and cancels the install")
+	check(not editor.is_plugin_enabled("fake_ext"), "nothing to enable")
+	check(result["native"], "reported as native code")
+	check(result["restart_recommended"], "a new extension loads after a restart")
+	check_eq(events, ["installed fake_ext 1.0.0"] as Array[String], "signal")
+
+
+func test_native_update_keeps_the_old_version_in_the_lock_and_a_backup() -> void:
+	_setup_ext("native_update")
+	var lock_entry := await _install_ext_base()
+	var result: Dictionary = await installer.install(ext_entry, source, "1.1.0", lock_entry)
+	check(result["ok"], "ok: %s" % result["error"])
+	check_eq(result["from"], "1.0.0", "no plugin.cfg: the old version comes from the lock")
+	check(FileAccess.file_exists(_ext_target().path_join("data/extra.tres")), "new file")
+	check(not FileAccess.file_exists(_ext_target().path_join("README.md")), "file the new version dropped is gone")
+	check_eq(Fs.hash_dir(_ext_target()), Fs.hash_dir(EXT_FIXTURES.path_join("1.1.0")), "new version in place")
+	check(FileAccess.file_exists(root.path_join("backup/fake_ext/1.0.0/README.md")), "old files backed up under the old version")
+	check_eq(editor.calls, PackedStringArray(), "no editor call at all")
+	check(result["native"] and result["restart_recommended"], "the loaded library is replaced after a restart")
+	check_eq(events, ["updated fake_ext 1.0.0 1.1.0"] as Array[String], "signal")
+
+
+func test_native_update_of_a_modified_folder_asks_first() -> void:
+	_setup_ext("native_modified")
+	var lock_entry := await _install_ext_base()
+	write_text(_ext_target().path_join("data/default.tres"), "edited")
+	var result: Dictionary = await installer.install(ext_entry, source, "1.1.0", lock_entry)
+	check(not result["ok"], "refused")
+	check_eq(result["needs_confirmation"], Installer.CONFIRM_MODIFIED, "manual edits are never overwritten silently")
+	check_eq(FileAccess.get_file_as_string(_ext_target().path_join("data/default.tres")), "edited", "edit kept")
+
+
+func test_native_failed_replace_restores_the_old_files() -> void:
+	_setup_ext("native_restore")
+	if OS.get_name() == "Windows":
+		return # relies on a read-only folder blocking the delete, as a locked library does
+	var lock_entry := await _install_ext_base()
+	# A read-only folder keeps its files: the delete fails half way, like a library the OS has locked.
+	var locked := ProjectSettings.globalize_path(_ext_target().path_join("data"))
+	OS.execute("chmod", ["555", locked])
+	var result: Dictionary = await installer.install(ext_entry, source, "1.1.0", lock_entry)
+	OS.execute("chmod", ["755", locked])
+	check(not result["ok"], "failed")
+	check(result["restored"], "old files back: %s" % result["error"])
+	check_eq(Fs.hash_dir(_ext_target()), Fs.hash_dir(EXT_FIXTURES.path_join("1.0.0")), "folder is the old version")
+	check_eq(events, ["failed fake_ext"] as Array[String], "failure signal only")
+
+
+func test_native_package_with_a_plugin_cfg_is_not_toggled_either() -> void:
+	_setup_ext("native_both")
+	var package := temp_dir("native_both_package")
+	Fs.copy_dir(EXT_FIXTURES.path_join("1.0.0"), package.path_join("1.0.0"))
+	write_text(package.path_join("1.0.0/plugin.cfg"), "[plugin]\nname=\"Fake Ext\"\nversion=\"1.0.0\"\nscript=\"plugin.gd\"\n")
+	write_text(package.path_join("1.0.0/plugin.gd"), "@tool\nextends EditorPlugin\n")
+	source = FakeSource.new({ "1.0.0": package.path_join("1.0.0") })
+	var result: Dictionary = await installer.install(ext_entry, source, "1.0.0")
+	check(result["ok"], "ok: %s" % result["error"])
+	check_eq(installer.installed_version(ext_entry), "1.0.0", "version read from plugin.cfg when there is one")
+	check(not editor.calls.has("enable fake_ext") and not editor.calls.has("validate"),
+			"the native part cannot be swapped under a running editor: files now, plugin after the restart")
+	check(result["native"], "native")
+
+
+func test_package_without_plugin_cfg_or_extension_is_refused() -> void:
+	_setup_ext("native_none")
+	var package := temp_dir("native_none_package")
+	DirAccess.make_dir_recursive_absolute(package.path_join("1.0.0"))
+	write_text(package.path_join("1.0.0/readme.md"), "nothing to install")
+	source = FakeSource.new({ "1.0.0": package.path_join("1.0.0") })
+	var result: Dictionary = await installer.install(ext_entry, source, "1.0.0")
+	check(not result["ok"], "refused")
+	check(str(result["error"]).contains(".gdextension"), "says what a package needs: %s" % result["error"])
+	check(not DirAccess.dir_exists_absolute(_ext_target()), "nothing installed")
+
+
+func test_plain_plugin_is_not_native() -> void:
+	_setup("not_native")
+	var result: Dictionary = await installer.install(entry, source, "1.0.0")
+	check(result["ok"], "ok")
+	check(not result["native"], "a plugin with only scripts reloads without a restart")
+	check(not result["restart_recommended"], "no restart")
+
+
+func test_native_uninstall_keeps_a_backup() -> void:
+	_setup_ext("native_uninstall")
+	await _install_ext_base()
+	editor.calls.clear()
+	var lock := Lockfile.new()
+	lock.set_installed("fake_ext", "1.0.0", "sha256:x", "2026-10-01")
+	var result: Dictionary = await installer.uninstall(ext_entry, lock.get_entry("fake_ext"))
+	check(result["ok"], "ok: %s" % result["error"])
+	check(not DirAccess.dir_exists_absolute(_ext_target()), "folder removed")
+	check(DirAccess.dir_exists_absolute(root.path_join("backup/fake_ext/1.0.0")), "the backup is named after the locked version")
+	check(FileAccess.file_exists(str(result["backup_path"]).path_join("fake_ext.gdextension")), "backup holds the extension")
+	check(result["native"] and result["restart_recommended"], "the loaded library goes away with a restart")
+	check(editor.calls.is_empty(), "no scan: it would reload every script")

@@ -27,6 +27,7 @@ extends RefCounted
 const GodotEditorBridge := preload("res://addons/loadout/editor/godot_editor_bridge.gd")
 const Log := preload("res://addons/loadout/util/log.gd")
 const Fs := preload("res://addons/loadout/util/fs.gd")
+const Package := preload("res://addons/loadout/util/package.gd")
 
 const FIXTURES := "res://tests/fixtures/addons/fake_a"
 const SMOKE_DIR := "user://loadout_smoke"
@@ -513,8 +514,14 @@ func _run_remote() -> void:
 	_expect(summary["failed"].is_empty(), "install: %s" % summary["failed"])
 	for state in manager.states:
 		_expect(state.status == LoadoutManager.Status.OK, "%s installed, status %s" % [state.id, LoadoutManager.Status.find_key(state.status)])
-		_expect(_installer.editor.is_plugin_running(state.entry.folder), "%s EditorPlugin running" % state.id)
-		Log.write("remote %s: installed %s, hash %s" % [state.id, state.installed_version, state.lock_entry.folder_hash.left(19) if state.lock_entry != null else "-"])
+		if state.native:
+			# A GDExtension has no EditorPlugin to run, and its library only loads after a restart.
+			_expect(Fs.has_files(_installer.target_dir(state.entry)) and Package.has_extension(_installer.target_dir(state.entry)),
+					"%s native files in place" % state.id)
+		else:
+			_expect(_installer.editor.is_plugin_running(state.entry.folder), "%s EditorPlugin running" % state.id)
+		Log.write("remote %s: installed %s%s, hash %s" % [state.id, state.installed_version, " (native, active after a restart)" if state.native else "",
+				state.lock_entry.folder_hash.left(19) if state.lock_entry != null else "-"])
 	for state in manager.states:
 		await manager.uninstall(state.id)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(LoadoutLockfile.DEFAULT_PATH))

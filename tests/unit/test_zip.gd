@@ -84,3 +84,41 @@ func test_not_a_zip() -> void:
 	var dir := temp_dir("zip_invalid")
 	write_text(dir.path_join("package.zip"), "<html>rate limited</html>")
 	check(not Zip.extract_plugin(dir.path_join("package.zip"), "fake_a", dir.path_join("out"))["ok"], "invalid archive")
+
+
+func test_extension_without_plugin_cfg() -> void:
+	var dir := temp_dir("zip_extension")
+	var source := "res://tests/fixtures/addons/fake_ext/1.0.0"
+	make_zip(source, dir.path_join("package.zip"), "pkg-1.0/addons/fake_ext/")
+	var result := Zip.extract_plugin(dir.path_join("package.zip"), "fake_ext", dir.path_join("out"))
+	check(result["ok"], "ok: %s" % result["error"])
+	check_eq(result["source_folder"], "fake_ext", "folder name")
+	check_eq(Fs.hash_dir(dir.path_join("out")), Fs.hash_dir(source), "everything below the addon folder")
+
+
+func test_extension_below_a_bin_folder_still_extracts_the_addon_folder() -> void:
+	var dir := temp_dir("zip_extension_bin")
+	make_raw_zip(dir.path_join("package.zip"), {
+		"addons/fake_ext/bin/fake_ext.gdextension": "[configuration]\n",
+		"addons/fake_ext/bin/libfake_ext.so": "x",
+		"addons/fake_ext/LICENSE": "MIT",
+		"README.md": "outside",
+	})
+	var result := Zip.extract_plugin(dir.path_join("package.zip"), "fake_ext", dir.path_join("out"))
+	check(result["ok"], "ok: %s" % result["error"])
+	check(FileAccess.file_exists(dir.path_join("out/LICENSE")), "files next to bin/ come along")
+	check(FileAccess.file_exists(dir.path_join("out/bin/fake_ext.gdextension")), "the extension keeps its place")
+	check(not FileAccess.file_exists(dir.path_join("out/README.md")), "files outside the addon do not")
+
+
+func test_plugin_cfg_wins_over_an_extension_elsewhere() -> void:
+	var dir := temp_dir("zip_both")
+	make_raw_zip(dir.path_join("package.zip"), {
+		"addons/fake_a/plugin.cfg": "[plugin]\nname=\"a\"\nversion=\"1.0.0\"\nscript=\"plugin.gd\"\n",
+		"addons/fake_a/plugin.gd": "extends EditorPlugin",
+		"demo/other/other.gdextension": "[configuration]\n",
+	})
+	var result := Zip.extract_plugin(dir.path_join("package.zip"), "fake_a", dir.path_join("out"))
+	check(result["ok"], "ok: %s" % result["error"])
+	check(FileAccess.file_exists(dir.path_join("out/plugin.cfg")), "the plugin is extracted")
+	check(not FileAccess.file_exists(dir.path_join("out/other.gdextension")), "not the unrelated extension")

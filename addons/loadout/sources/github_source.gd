@@ -14,7 +14,8 @@ const PER_PAGE := 50
 ## major version a range like ^1 needs).
 const MAX_PAGES := 4
 ## The version is the end of the tag, after the start or a separator (so "godot4-1.2.3" is 1.2.3, not 4.0.0-1.2.3).
-const _TAG_VERSION_PATTERN := "(?:^|[-_/\\s])[vV]?(\\d+(?:\\.\\d+){0,2}(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?)$"
+## A Godot-style stage after a dot ("v2.5.stable", "v2.5.1.rc2", "v2.6.dev2") belongs to the version too.
+const _TAG_VERSION_PATTERN := "(?:^|[-_/\\s])[vV]?(\\d+(?:\\.\\d+){0,2}(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*|\\.(?:stable|(?:dev|alpha|beta|rc)\\d*))?)$"
 
 ## A tag that is a single big number ("nightly-20260105", "build-2024") is a date or build number.
 const MAX_BARE_MAJOR := 1000
@@ -145,18 +146,31 @@ func _parse_release(item: Dictionary) -> Dictionary:
 	}
 
 
-## The release's zip asset (one named after the plugin folder wins), else the tag's source zip.
+## The release's zip asset (one named after the plugin folder wins, a demo project only when there
+## is nothing else), else the tag's source zip.
 func _package_url(item: Dictionary) -> String:
 	var zips: Array[Dictionary] = []
 	for asset: Variant in item.get("assets", []):
 		if typeof(asset) == TYPE_DICTIONARY and str(asset.get("name", "")).to_lower().ends_with(".zip"):
 			zips.append(asset)
+	var named: Array[Dictionary] = []
 	for asset in zips:
 		if str(asset["name"]).to_lower().contains(folder.to_lower()):
+			named.append(asset)
+	for asset in named:
+		if not _is_demo(str(asset["name"])):
 			return _text(asset.get("browser_download_url"))
+	if not named.is_empty():
+		return _text(named[0].get("browser_download_url"))
 	if zips.size() == 1:
 		return _text(zips[0].get("browser_download_url"))
 	return _text(item.get("zipball_url"))
+
+
+## Whether a zip is a sample project built around the plugin, not the plugin itself.
+static func _is_demo(asset_name: String) -> bool:
+	var lowered := asset_name.to_lower()
+	return lowered.contains("demo") or lowered.contains("example") or lowered.contains("sample")
 
 
 ## A JSON value as text, null becomes "".

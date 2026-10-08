@@ -4,6 +4,8 @@ extends RefCounted
 
 ## Semantic version (major.minor.patch[-prerelease][+build]) and version ranges.
 ## Accepted versions are lenient: optional leading "v", missing minor/patch default to 0.
+## Godot-style stages after a dot are read too: "2.5.stable" is 2.5.0, "2.5.1.rc2" is 2.5.1-rc.2,
+## "2.6.dev2" is 2.6.0-dev.2 (numbers in a stage compare as numbers, so rc10 is above rc2).
 ## Ranges: "" or "*" (any), "1.2.3" (exact), "1.2" (1.2.x), "^1.2.3", "~1.2.3".
 ## Prereleases only match a range whose own version is a prerelease of the same major.minor.patch,
 ## unless include_prereleases is set (then they match like any version below the range's upper bound).
@@ -14,7 +16,12 @@ const _VERSION_PATTERN := "^[vV]?(0|[1-9]\\d*)(?:\\.(0|[1-9]\\d*))?(?:\\.(0|[1-9
 ## Longer numbers would overflow an int.
 const MAX_DIGITS := 9
 
+## "<numbers>.stable" or "<numbers>.<dev|alpha|beta|rc><n>": groups are the numbers (with an optional
+## leading v), the stage word and its number.
+const _STAGE_PATTERN := "^([vV]?\\d+(?:\\.\\d+){0,2})\\.(?:(stable)|(dev|alpha|beta|rc)(\\d*))$"
+
 static var _regex: RegEx
+static var _stage_regex: RegEx
 
 var major: int = 0
 var minor: int = 0
@@ -28,7 +35,8 @@ var precision: int = 3
 static func parse(text: String) -> LoadoutVersion:
 	if _regex == null:
 		_regex = RegEx.create_from_string(_VERSION_PATTERN)
-	var found := _regex.search(text.strip_edges())
+		_stage_regex = RegEx.create_from_string(_STAGE_PATTERN)
+	var found := _regex.search(_without_godot_stage(text.strip_edges()))
 	if found == null:
 		return null
 	for group in 3:
@@ -50,6 +58,17 @@ static func parse(text: String) -> LoadoutVersion:
 			if identifier.length() > 1 and identifier.begins_with("0") and identifier.is_valid_int():
 				return null
 	return version
+
+
+## "2.5.1.rc2" as "2.5.1-rc.2" and "2.5.stable" as "2.5"; any other text is returned unchanged.
+static func _without_godot_stage(text: String) -> String:
+	var staged := _stage_regex.search(text)
+	if staged == null:
+		return text
+	if staged.get_string(2) == "stable":
+		return staged.get_string(1)
+	var number := staged.get_string(4)
+	return "%s-%s%s" % [staged.get_string(1), staged.get_string(3), "." + number if number != "" else ""]
 
 
 static func satisfies(version_text: String, range_text: String, include_prereleases: bool = false) -> bool:
