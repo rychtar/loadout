@@ -4,7 +4,7 @@
 
 ### Added
 
-- **GDExtensions**: add-ons that ship a `.gdextension` file, with or without a `plugin.cfg` (for example Orchestrator), can be installed, updated, restored and removed. Their files are backed up and replaced, nothing is enabled or disabled, and Loadout offers an editor restart because the editor only loads native code at startup. The version is taken from the lock when there is no `plugin.cfg`. Add-ons like this that are already in the project are listed for "Add to registry…" too.
+- **GDExtensions**: add-ons that ship a `.gdextension` file, with or without a `plugin.cfg` (for example Orchestrator), can be installed, updated, restored and removed. A new one is copied and Godot loads it right after (no restart). An update or a removal backs up and replaces or deletes the files and offers an editor restart, because the editor cannot swap a library it has loaded. Nothing is enabled or disabled. The version is taken from the lock when there is no `plugin.cfg`. Add-ons like this that are already in the project are listed for "Add to registry…" too.
 - Releases numbered the way Godot does it are understood: `v2.5.stable` is 2.5.0, `v2.5.1.rc2` is a release candidate of 2.5.1, `v2.6.dev2` a snapshot of 2.6.0. They are offered as pre-releases only with the opt-in, as before.
 
 ### Changed

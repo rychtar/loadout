@@ -21,7 +21,7 @@ plugins a project is missing, keeps their versions in a lock file and tells you 
 - **Hands off your changes**: a plugin you edited by hand or pinned is never overwritten without
   asking.
 - **GDExtensions too**: add-ons made of native code (such as Orchestrator) are installed and updated
-  like plugins; the editor restarts to load them.
+  like plugins; a new one loads right away, an update takes effect after an editor restart.
 - **Takes over what you already have**: add plugins that are already in the project to the registry
   without reinstalling them.
 - Updates itself, has no dependencies and runs only in the editor.
@@ -79,9 +79,10 @@ the plugin is enabled and checked again. Any failure brings the backup back. Loa
 the same way and restarts the editor. Offline, it uses the data it saved last time and warns in the
 dock.
 
-An add-on with a `.gdextension` file (a GDExtension, with or without `plugin.cfg`) is different: the
-editor loads native code once at startup and cannot swap it, so Loadout only backs up and replaces
-the files and offers an editor restart. Its version is kept in the lock, since the package has no
+An add-on with a `.gdextension` file (a GDExtension, with or without `plugin.cfg`) is different. A new
+one is copied and Godot loads it itself. The editor cannot swap a native library it has loaded, so an
+update or a removal only backs up and replaces (or deletes) the files and offers an editor restart.
+Its version is kept in the lock, since the package has no
 `plugin.cfg` to say. On Windows a library the editor has loaded is locked: the replacement then fails,
 the old files are restored and you update after closing the editor.
 
