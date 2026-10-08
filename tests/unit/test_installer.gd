@@ -319,7 +319,8 @@ func test_native_fresh_install_does_not_touch_the_plugin_state() -> void:
 	check_eq(editor.calls, PackedStringArray(), "no editor call at all: a scan of a new .gdextension reloads every script and cancels the install")
 	check(not editor.is_plugin_enabled("fake_ext"), "nothing to enable")
 	check(result["native"], "reported as native code")
-	check(result["restart_recommended"], "a new extension loads after a restart")
+	check(result["scan_wanted"], "the caller scans when it is done: Godot then loads the new extension")
+	check(not result["restart_recommended"], "no restart: nothing is loaded yet")
 	check_eq(events, ["installed fake_ext 1.0.0"] as Array[String], "signal")
 
 
@@ -335,6 +336,7 @@ func test_native_update_keeps_the_old_version_in_the_lock_and_a_backup() -> void
 	check(FileAccess.file_exists(root.path_join("backup/fake_ext/1.0.0/README.md")), "old files backed up under the old version")
 	check_eq(editor.calls, PackedStringArray(), "no editor call at all")
 	check(result["native"] and result["restart_recommended"], "the loaded library is replaced after a restart")
+	check(not result["scan_wanted"], "no scan: Godot would deinitialize the loaded library under the editor")
 	check_eq(events, ["updated fake_ext 1.0.0 1.1.0"] as Array[String], "signal")
 
 
@@ -395,7 +397,7 @@ func test_plain_plugin_is_not_native() -> void:
 	_setup("not_native")
 	var result: Dictionary = await installer.install(entry, source, "1.0.0")
 	check(result["ok"], "ok")
-	check(not result["native"], "a plugin with only scripts reloads without a restart")
+	check(not result["native"] and not result["scan_wanted"], "a plugin with only scripts reloads without a restart")
 	check(not result["restart_recommended"], "no restart")
 
 
@@ -412,3 +414,8 @@ func test_native_uninstall_keeps_a_backup() -> void:
 	check(FileAccess.file_exists(str(result["backup_path"]).path_join("fake_ext.gdextension")), "backup holds the extension")
 	check(result["native"] and result["restart_recommended"], "the loaded library goes away with a restart")
 	check(editor.calls.is_empty(), "no scan: it would reload every script")
+
+
+func test_listing_backups_of_a_plugin_that_never_had_one_is_quiet() -> void:
+	_setup("no_backups")
+	check(installer.list_backups(entry).is_empty(), "no backup folder, no backups (and no engine error)")

@@ -14,6 +14,12 @@ extends RefCounted
 ## Remote sources (needs network; registry with e.g. a GitHub entry, auto_install):
 ##   godot --headless -e --path <project> -- --loadout-registry=<file> --loadout-smoke=remote
 ##   forced update check, install of every registry plugin, running check, uninstall
+## GDExtension (needs network; use a temporary project, the extension stays loaded in that editor; registry
+## with a GitHub or store entry for an add-on that has a .gdextension and no plugin.cfg, e.g. Orchestrator):
+##   godot --headless -e --path <project> -- --loadout-registry=<file> --loadout-smoke=native
+##   install, the one scan the dock would do afterwards, then checks that Godot loaded the extension without
+##   a restart. Godot reloads all scripts during that scan, which ends the coroutine, so the last checks
+##   run from timers and the process quits itself.
 ## Self-update (GUI or headless; registry has a "loadout" entry pointing to a newer Loadout copy):
 ##   godot -e --path <project> -- --loadout-registry=<file> --loadout-smoke=self
 ##   first run updates Loadout from the dock and the editor restarts itself. Godot relaunches it
@@ -32,12 +38,16 @@ const Package := preload("res://addons/loadout/util/package.gd")
 const FIXTURES := "res://tests/fixtures/addons/fake_a"
 const SMOKE_DIR := "user://loadout_smoke"
 const AUTOLOAD_NAME := "FakeA"
+## Native mode: how long after the scan the checks run, and the limit for the whole test.
+const NATIVE_SETTLE_S := 10.0
+const NATIVE_GUARD_S := 180.0
 
 var _tree: SceneTree
 var _installer: LoadoutInstaller
 var _entry: LoadoutRegistry.Entry
 var _failures: PackedStringArray = []
 var _plugin: EditorPlugin
+var _native_scans := 0
 # Dock smoke state, shared by the _dock_* steps.
 var _manager: LoadoutManager
 var _dock: Control
@@ -75,6 +85,8 @@ func run(mode: String) -> bool:
 			await _run_dock()
 		"remote":
 			await _run_remote()
+		"native":
+			await _run_native()
 		"self":
 			await _run_self()
 		"selfnew":
@@ -525,6 +537,59 @@ func _run_remote() -> void:
 	for state in manager.states:
 		await manager.uninstall(state.id)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(LoadoutLockfile.DEFAULT_PATH))
+
+
+## Installs the missing add-ons with native code and checks what happens after the scan the dock asks for.
+func _run_native() -> void:
+	# Godot reloads all scripts after the scan, which frees this object: keep it for the timer callbacks.
+	Engine.set_meta("loadout_smoke", self)
+	var manager: LoadoutManager = _plugin.get_manager()
+	for connection in manager.scan_requested.get_connections():
+		manager.scan_requested.disconnect(connection["callable"])
+	manager.scan_requested.connect(_native_scan_requested)
+	await manager.refresh(true)
+	_expect(manager.errors.is_empty(), "registry and lock load: %s" % ", ".join(manager.errors))
+	var summary: Dictionary = await manager.install_missing()
+	_expect(summary["failed"].is_empty(), "install: %s" % summary["failed"])
+	_expect(not summary["restart_recommended"], "a new extension needs no restart")
+	_expect(_native_scans == 1, "one scan requested, got %d" % _native_scans)
+	for state in manager.states:
+		_expect(state.native and state.status == LoadoutManager.Status.OK, "%s installed as native code, status %s" % [state.id, LoadoutManager.Status.find_key(state.status)])
+	Log.write("native: installed, waiting for the scan")
+	# The scan ends this coroutine (script reload); _native_check finishes the test. The timer is only a guard.
+	await _tree.create_timer(NATIVE_GUARD_S).timeout
+	_expect(false, "the scan did not finish the test in %d s" % NATIVE_GUARD_S)
+
+
+func _native_scan_requested() -> void:
+	_native_scans += 1
+	_tree.create_timer(1.0).timeout.connect(_native_scan, CONNECT_ONE_SHOT)
+
+
+func _native_scan() -> void:
+	Log.write("native: scanning")
+	EditorInterface.get_resource_filesystem().scan()
+	_tree.create_timer(NATIVE_SETTLE_S).timeout.connect(_native_check, CONNECT_ONE_SHOT)
+
+
+func _native_check() -> void:
+	var manager: LoadoutManager = _plugin.get_manager()
+	for state in manager.states:
+		var dir := _installer.target_dir(state.entry)
+		var loaded := false
+		for relative in Fs.list_files(dir):
+			if relative.ends_with(".gdextension"):
+				var path := dir.path_join(relative)
+				loaded = GDExtensionManager.is_extension_loaded(path)
+				Log.write("native: %s loaded=%s" % [path, loaded])
+		_expect(loaded, "%s: Godot loaded the extension after the scan" % state.id)
+		Fs.remove_dir(dir)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(LoadoutLockfile.DEFAULT_PATH))
+	for failure in _failures:
+		Log.write("SMOKE FAIL %s" % failure, Log.Level.ERROR)
+	Log.write("SMOKE native: %s" % ("passed" if _failures.is_empty() else "%d failed" % _failures.size()))
+	Engine.remove_meta("loadout_smoke")
+	_tree.quit(0 if _failures.is_empty() else 1)
 
 
 func _run_self() -> void:

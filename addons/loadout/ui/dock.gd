@@ -12,6 +12,8 @@ const BackupDialog := preload("backup_dialog.gd")
 const Status := LoadoutManager.Status
 ## Characters of release notes shown in the update confirmation.
 const NOTES_PREVIEW := 600
+## Seconds between an install that needs a scan (a new GDExtension) and the scan.
+const SCAN_DELAY_S := 1.0
 
 const STATUS_TEXT := {
 	Status.OK: "Up to date",
@@ -106,6 +108,7 @@ func _ready() -> void:
 	_build()
 	manager.states_changed.connect(_rebuild)
 	manager.restart_recommended.connect(_offer_restart)
+	manager.scan_requested.connect(_scan_soon)
 	manager.restart_required.connect(_on_restart_required)
 	_rebuild()
 
@@ -767,6 +770,14 @@ func _handle_result(result: Variant) -> void:
 		TYPE_STRING:
 			if result != "":
 				_show_alert(result)
+
+
+## A new GDExtension is only picked up by a scan, and the scan makes Godot reload every script, which
+## cancels any coroutine still running. The short delay lets the action that asked for it finish
+## and the dock redraw first.
+func _scan_soon() -> void:
+	get_tree().create_timer(SCAN_DELAY_S).timeout.connect(
+			func() -> void: EditorInterface.get_resource_filesystem().scan(), CONNECT_ONE_SHOT)
 
 
 func _offer_restart() -> void:

@@ -786,13 +786,15 @@ func test_native_install_and_update() -> void:
 	_setup("native", [_ext("fake_ext", { "range": "^1.0.0" })])
 	var source := _fake_ext("fake_ext", ["1.0.0"])
 	var restarts: Array[int] = [0]
+	var scans: Array[int] = [0]
 	manager.restart_recommended.connect(func() -> void: restarts[0] += 1)
+	manager.scan_requested.connect(func() -> void: scans[0] += 1)
 	await manager.refresh()
 	check_eq(_status("fake_ext"), Manager.Status.MISSING, "missing")
 	var summary: Dictionary = await manager.install_missing()
 	check_eq(summary["installed"], PackedStringArray(["fake_ext"]), "installed: %s" % summary["failed"])
-	check(summary["restart_recommended"], "the summary asks for a restart")
-	check_eq(restarts[0], 1, "restart offered once")
+	check(not summary["restart_recommended"], "a new extension needs no restart")
+	check_eq([restarts[0], scans[0]], [0, 1], "a scan is requested, no restart")
 	check_eq(_status("fake_ext"), Manager.Status.OK, "ok")
 	var entry := _saved_lock().get_entry("fake_ext")
 	check(entry != null and entry.version == "1.0.0" and entry.folder_hash != "", "version and hash in the lock")
@@ -802,7 +804,7 @@ func test_native_install_and_update() -> void:
 	check_eq(_status("fake_ext"), Manager.Status.UPDATE, "update found for an add-on with no plugin.cfg")
 	var result: Dictionary = await manager.install("fake_ext")
 	check(result["ok"], "updated: %s" % result["error"])
-	check_eq(restarts[0], 2, "restart offered again")
+	check_eq([restarts[0], scans[0]], [1, 1], "the update asks for a restart and for no scan")
 	check_eq(_status("fake_ext"), Manager.Status.OK, "ok after update")
 	check_eq(_saved_lock().get_entry("fake_ext").version, "1.1.0", "lock updated")
 	check(not editor.calls.has("enable fake_ext") and not editor.calls.has("disable fake_ext"), "never toggled")
@@ -866,3 +868,52 @@ func test_removing_a_native_addon_asks_for_a_restart() -> void:
 	check_eq(restarts[0], 1, "the loaded library stays until a restart")
 	check(not DirAccess.dir_exists_absolute(addons.path_join("fake_ext")), "folder gone")
 	check(_saved_lock().ignored.has("fake_ext"), "not brought back by the next sync")
+
+
+func test_one_scan_after_a_batch_of_native_installs() -> void:
+	_setup("native_batch", [_ext("fake_ext"), _ext("fake_ext2")])
+	_fake_ext("fake_ext", ["1.0.0"])
+	_fake_ext("fake_ext2", ["1.0.0"])
+	var scans: Array[int] = [0]
+	var installed_at_scan: Array[int] = [-1]
+	var folder := addons
+	manager.scan_requested.connect(func() -> void:
+		scans[0] += 1
+		installed_at_scan[0] = DirAccess.get_directories_at(folder).size())
+	await manager.refresh()
+	var summary: Dictionary = await manager.install_missing()
+	check_eq(summary["installed"].size(), 2, "both installed: %s" % summary["failed"])
+	check_eq(scans[0], 1, "one scan for the whole batch: a scan in between would cancel the rest")
+	check_eq(installed_at_scan[0], 2, "asked after the last install")
+
+
+func test_restoring_a_native_addon_removed_in_this_session_needs_a_restart() -> void:
+	_setup("native_restore_removed", [_ext()])
+	_fake_ext("fake_ext", ["1.0.0"])
+	await manager.refresh()
+	await manager.install_missing()
+	await manager.uninstall("fake_ext")
+	var restarts: Array[int] = [0]
+	var scans: Array[int] = [0]
+	manager.restart_recommended.connect(func() -> void: restarts[0] += 1)
+	manager.scan_requested.connect(func() -> void: scans[0] += 1)
+	var backups: Array[Dictionary] = manager.available_backups("fake_ext")
+	var result: Dictionary = await manager.restore_backup("fake_ext", backups[0]["path"])
+	check(result["ok"], "restored: %s" % result["error"])
+	check_eq([restarts[0], scans[0]], [1, 0], "the old library is still loaded, so a restart, not a scan")
+
+
+func test_reinstalling_a_removed_native_addon_needs_a_restart_not_a_scan() -> void:
+	# The removed add-on's library is still loaded, so a scan would find nothing to load.
+	_setup("native_reinstall", [_ext()])
+	_fake_ext("fake_ext", ["1.0.0", "1.1.0"])
+	await manager.refresh()
+	await manager.install("fake_ext", false, "1.0.0")
+	await manager.uninstall("fake_ext")
+	var restarts: Array[int] = [0]
+	var scans: Array[int] = [0]
+	manager.restart_recommended.connect(func() -> void: restarts[0] += 1)
+	manager.scan_requested.connect(func() -> void: scans[0] += 1)
+	var result: Dictionary = await manager.install("fake_ext", false, "1.1.0")
+	check(result["ok"], "installed again: %s" % result["error"])
+	check_eq([restarts[0], scans[0]], [1, 0], "restart, no scan")

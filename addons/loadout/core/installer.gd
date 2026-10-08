@@ -80,9 +80,12 @@ func check_overwrite(entry: LoadoutRegistry.Entry, lock_entry: LoadoutLockfile.E
 ## "restart_recommended", "needs_confirmation", "load_failed", "native" }. The caller records "hash" in the lock.
 ## load_failed: the files were fine but the plugin did not compile or start (often written for
 ## another Godot version), so an older release may work.
-## native: the package holds a GDExtension. Its files are replaced but nothing is enabled, disabled
-## or loaded (code from a native library cannot be swapped in a running editor), so "restart_recommended"
-## is set. "from" is the version in the lock when the folder has no plugin.cfg to say.
+## native: the package holds a GDExtension. Nothing is enabled, disabled or scanned here.
+## - installed over files already there (an update): the library may be loaded and cannot be swapped
+##   in a running editor, so "restart_recommended" is set.
+## - installed fresh: "scan_wanted" is set. The caller scans once it has nothing else running, and
+##   Godot then loads the new extension itself.
+## "from" is the version in the lock when the folder has no plugin.cfg to say.
 func install(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: String,
 		lock_entry: LoadoutLockfile.Entry = null, force: bool = false, enable: bool = true) -> Dictionary:
 	var result := _new_result(entry, version, lock_entry)
@@ -179,6 +182,8 @@ func self_update(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: S
 func list_backups(entry: LoadoutRegistry.Entry) -> Array[Dictionary]:
 	var list: Array[Dictionary] = []
 	var root := backup_root.path_join(entry.id)
+	if not DirAccess.dir_exists_absolute(root):
+		return list
 	for name in DirAccess.get_directories_at(root):
 		var path := root.path_join(name)
 		if not Fs.has_files(path):
@@ -271,9 +276,11 @@ func _install_fresh(entry: LoadoutRegistry.Entry, staged: String, enable: bool, 
 
 
 ## A package with a GDExtension: back up the old files and swap the folder. Nothing is enabled,
-## disabled, scanned or compiled. A loaded native library stays in memory, so the new one runs after
-## a restart; and scanning a new .gdextension makes Godot reload all scripts, which cancels every
-## coroutine in flight (this one and the manager's included), so it is left to the restart.
+## disabled, scanned or compiled here. Scanning a new .gdextension makes Godot load it and reload all
+## scripts, which cancels every coroutine in flight (this one and the manager's included), so a fresh
+## install only reports "scan_wanted" and the caller scans when it is done. A library that is already
+## loaded stays in memory (the old one keeps running), so a replacement is not scanned at all and
+## reports "restart_recommended": Godot would deinitialize it under the running editor.
 ## On failure the old files come back. On Windows a loaded library is locked and cannot be replaced.
 func _install_native(entry: LoadoutRegistry.Entry, staged: String, result: Dictionary) -> void:
 	result["native"] = true
@@ -297,7 +304,10 @@ func _install_native(entry: LoadoutRegistry.Entry, staged: String, result: Dicti
 		elif backup != "":
 			result["error"] += " A loaded native library may be locked. Close the editor and copy the backup %s over the folder by hand." % backup
 		return
-	result["restart_recommended"] = true
+	if backup == "":
+		result["scan_wanted"] = true
+	else:
+		result["restart_recommended"] = true
 	result["ok"] = true
 
 
@@ -490,7 +500,7 @@ func _new_result(entry: LoadoutRegistry.Entry, version: String, lock_entry: Load
 	return {
 		"ok": false, "error": "", "id": entry.id, "from": installed, "to": version,
 		"hash": "", "backup_path": "", "restored": false, "restart_recommended": false, "needs_confirmation": "",
-		"warning": "", "package_folder": "", "load_failed": false, "native": false,
+		"warning": "", "package_folder": "", "load_failed": false, "native": false, "scan_wanted": false,
 	}
 
 

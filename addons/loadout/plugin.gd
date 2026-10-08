@@ -13,6 +13,7 @@ const TOKEN_SETTING := "loadout/github_token"
 ## Development only: use another registry file instead of the one in the editor config dir
 ## (the update cache then lives next to it).
 const REGISTRY_ARG_PREFIX := "--loadout-registry="
+const REGISTRY_ENV := "LOADOUT_REGISTRY"
 ## Development only: godot -e --path . -- --loadout-smoke=<mode> runs tests/editor/installer_smoke.gd
 ## and quits the editor (exit code 0 = passed). Ignored when the tests folder is not present.
 const SMOKE_ARG_PREFIX := "--loadout-smoke="
@@ -126,8 +127,12 @@ func _register_settings() -> void:
 	settings.add_property_info({ "name": Dock.STARTERS_SEEN_SETTING, "type": TYPE_PACKED_STRING_ARRAY })
 
 
+## Development only: LOADOUT_REGISTRY=<file> does the same as --loadout-registry, and unlike that
+## argument it survives an editor restart (Godot relaunches the editor without the arguments after "--").
 func _registry_path() -> String:
 	var override := _cmdline_value(REGISTRY_ARG_PREFIX)
+	if override == "":
+		override = OS.get_environment(REGISTRY_ENV)
 	if override != "":
 		return override
 	return EditorInterface.get_editor_paths().get_config_dir().path_join(REGISTRY_FILE)

@@ -21,6 +21,10 @@ const REGISTRY_UNREADABLE := "The registry cannot be read, nothing changed."
 signal states_changed()
 ## An installed or updated plugin left stale class_name entries; offer an editor restart.
 signal restart_recommended()
+## Files of an add-on with native code were put in place and the editor should scan them. Emitted once
+## the whole action is over (scanning a new GDExtension reloads every script, which cancels whatever
+## is still running).
+signal scan_requested()
 ## Loadout replaced its own files; the editor must restart now (the dock does it).
 signal restart_required()
 
@@ -82,6 +86,12 @@ var _seen_addons: Dictionary[String, bool] = {}
 var loaded := false
 ## True while an install or update runs; other actions are refused meanwhile.
 var busy := false
+var _scan_pending := false
+## Add-ons with native code whose files were replaced or deleted while the editor runs: the old
+## library stays loaded, so putting files back needs a restart, not a scan.
+var _native_changed: Dictionary[String, bool] = {}
+## Installs running as one batch (install_missing()): the scan waits for the last one.
+var _batch_depth := 0
 
 ## Starter pack file (tests use their own).
 var starter_pack_path := LoadoutStarterPack.DEFAULT_PATH
@@ -215,6 +225,7 @@ func use_package_folders(folders: Dictionary) -> Dictionary:
 
 func _install_all(ids: PackedStringArray) -> Dictionary:
 	var summary := { "installed": PackedStringArray(), "failed": {}, "folders": {}, "restart_recommended": false }
+	_batch_depth += 1
 	for id in _self_last(ids):
 		var result := await install(id)
 		if result["ok"]:
@@ -226,6 +237,8 @@ func _install_all(ids: PackedStringArray) -> Dictionary:
 			summary["failed"][id] = result["error"]
 			if result.get("fallback_version", "") != "":
 				summary["failed"][id] += " An older version (%s) may work: select the plugin and use Install version…." % result["fallback_version"]
+	_batch_depth -= 1
+	_flush_scan()
 	return summary
 
 
@@ -288,7 +301,9 @@ func available_backups(id: String) -> Array[Dictionary]:
 ## and pins that version unless pin is false. Works for a removed plugin too.
 ## Returns the installer result.
 func restore_backup(id: String, backup_path: String, pin: bool = true) -> Dictionary:
-	return await _exclusive(id, func(state: PluginState) -> Dictionary: return await _restore_backup(state, backup_path, pin))
+	var result: Dictionary = await _exclusive(id, func(state: PluginState) -> Dictionary: return await _restore_backup(state, backup_path, pin))
+	_flush_scan()
+	return result
 
 
 ## Which files of the plugin differ from the version Loadout installed (downloads that version again
@@ -318,6 +333,7 @@ func changed_files(id: String) -> Dictionary:
 ## "needs_confirmation" set.
 func install(id: String, force: bool = false, version: String = "", pin: bool = false) -> Dictionary:
 	var result: Dictionary = await _exclusive(id, func(state: PluginState) -> Dictionary: return await _install(state, force, version, pin))
+	_flush_scan()
 	if result.get("needs_confirmation", "") != "":
 		# What the caller needs to repeat the action after the user confirms.
 		result["version"] = version
@@ -732,6 +748,7 @@ func _install(state: PluginState, force: bool, version: String, pin: bool) -> Di
 			lockfile.set_pinned(state.id, pin)
 		lockfile.set_ignored(state.id, false)
 		_save_lock()
+		_note_native_result(state.id, result)
 		if result["restart_recommended"]:
 			restart_recommended.emit()
 	elif result.get("load_failed", false):
@@ -773,6 +790,7 @@ func _restore_backup(state: PluginState, backup_path: String, pin: bool) -> Dict
 		lockfile.set_pinned(state.id, pin)
 		lockfile.set_ignored(state.id, false)
 		_save_lock()
+		_note_native_result(state.id, result)
 		if result["restart_recommended"]:
 			restart_recommended.emit()
 	await refresh()
@@ -801,6 +819,7 @@ func _uninstall(state: PluginState) -> Dictionary:
 		lockfile.remove(state.id)
 		lockfile.set_ignored(state.id, true)
 		_save_lock()
+		_note_native_result(state.id, result)
 		if result["restart_recommended"]:
 			restart_recommended.emit()
 	await refresh()
@@ -821,6 +840,29 @@ func _self_update(state: PluginState, source: LoadoutSource, force: bool, versio
 		_save_lock()
 		restart_required.emit()
 	return result
+
+
+## Decides between a scan and a restart for a native install, and remembers what the editor holds.
+## A fresh copy is scanned (Godot loads it), unless an earlier library of the same add-on is still
+## loaded from before it was replaced or removed: then only a restart gets the new files running.
+func _note_native_result(id: String, result: Dictionary) -> void:
+	if not result.get("native", false):
+		return
+	var scan: bool = result.get("scan_wanted", false)
+	if scan and _native_changed.has(id):
+		scan = false
+		result["restart_recommended"] = true
+	if result["restart_recommended"]:
+		_native_changed[id] = true
+	result["scan_wanted"] = scan
+	_scan_pending = _scan_pending or scan
+
+
+## Asks for the scan once no batch is running.
+func _flush_scan() -> void:
+	if _scan_pending and _batch_depth == 0:
+		_scan_pending = false
+		scan_requested.emit()
 
 
 ## Runs an action on one plugin that changes the project. `busy` is set before the first await, so
