@@ -216,10 +216,10 @@ func _dock_update() -> void:
 	await _screenshot("dock_update_available")
 	var update_button := _find_button(_dock, "Update to 1.1.0")
 	_expect(update_button != null, "update button in the detail")
-	if update_button == null:
-		return
-	update_button.pressed.emit()
-	await _wait_until(func() -> bool: return _confirm.visible, 5000)
+	await _dock_context_menu()
+	# A double-click (or Enter) on the row runs the primary action: the update confirmation.
+	(_dock.get("_tree") as Tree).item_activated.emit()
+	_expect(await _wait_until(func() -> bool: return _confirm.visible, 5000), "a double-click asks to update")
 	await _screenshot("dock_update_confirm", _confirm)
 	_confirm.get_ok_button().pressed.emit()
 	await _wait_until(func() -> bool: return _status_of("fake_a") == LoadoutManager.Status.OK, 30000)
@@ -229,6 +229,22 @@ func _dock_update() -> void:
 		await _screenshot("dock_restart_offer", _confirm)
 		_confirm.get_cancel_button().pressed.emit()
 		await _dialog_closed(_confirm)
+
+
+## Right-click on the selected row: a menu with the same actions as the detail panel.
+func _dock_context_menu() -> void:
+	var tree: Tree = _dock.get("_tree")
+	var menu: PopupMenu = _dock.get("_context_menu")
+	var item := tree.get_root().get_first_child()
+	tree.item_mouse_selected.emit(tree.get_item_area_rect(item).get_center(), MOUSE_BUTTON_RIGHT)
+	_expect(await _wait_until(func() -> bool: return menu.visible, 2000), "right-click opens the action menu")
+	var texts := PackedStringArray()
+	for index in menu.item_count:
+		texts.append(menu.get_item_text(index))
+	_expect(texts.size() > 0 and texts[0].begins_with("Update to"), "the menu starts with the update (%s)" % ", ".join(texts))
+	await _screenshot("dock_context_menu", menu)
+	menu.hide()
+	await _dialog_closed(menu)
 
 
 ## A file added by hand makes the plugin Modified; "Show changes…" lists it.

@@ -99,6 +99,11 @@ var _backup_dialog: BackupDialog
 var _export_dialog: EditorFileDialog
 var _import_dialog: EditorFileDialog
 var _on_confirm: Callable
+## Actions _add_actions() collects for one plugin: [{ "text", "callable", "primary", "available" }].
+var _collected_actions: Array[Dictionary] = []
+## Right-click menu of the plugin list and the actions its items stand for (by index).
+var _context_menu: PopupMenu
+var _menu_actions: Array[Dictionary] = []
 var _selected_id := ""
 var _busy := false
 
@@ -286,6 +291,9 @@ func _build() -> void:
 	_tree.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_tree.custom_minimum_size = Vector2(0, 160)
 	_tree.item_selected.connect(_on_item_selected)
+	_tree.allow_rmb_select = true
+	_tree.item_mouse_selected.connect(_on_item_mouse_selected)
+	_tree.item_activated.connect(_on_item_activated)
 	_tree.resized.connect(_on_tree_resized)
 	add_child(_tree)
 	for boundary in [1, 2]:
@@ -320,6 +328,9 @@ func _build() -> void:
 	add_child(_detail_grid)
 	_detail_actions = HFlowContainer.new()
 	add_child(_detail_actions)
+	_context_menu = PopupMenu.new()
+	_context_menu.id_pressed.connect(func(index: int) -> void: _run(_menu_actions[index]["callable"]))
+	add_child(_context_menu)
 	_busy_label = Label.new()
 	_busy_label.text = "Working…"
 	_busy_label.visible = false
@@ -377,7 +388,8 @@ func _rebuild() -> void:
 	for state in manager.states:
 		var item := _tree.create_item(root)
 		item.set_text(0, state.display_name)
-		item.set_tooltip_text(0, "%s\n%s" % [state.id, state.source_label])
+		item.set_tooltip_text(0, "%s\n%s\n\nDouble-click: %s. Right-click: all actions." % [state.id, state.source_label,
+				_primary_action_hint(state)])
 		item.set_tooltip_text(1, "\n".join(PackedStringArray([state.message, state.warning])).strip_edges())
 		item.set_metadata(0, state.id)
 		item.set_text(1, STATUS_TEXT[state.status])
@@ -543,7 +555,60 @@ func _update_detail() -> void:
 	if state.lock_entry != null:
 		var lock := state.lock_entry
 		_add_row("Lock", "%s%s · %s · %s" % [lock.version, " (pin)" if lock.pinned else "", lock.folder_hash.substr(7, 8) if lock.folder_hash != "" else "no hash", lock.installed_at])
+	for action in _actions_for(state):
+		_detail_actions.add_child(_action_button(action))
+
+
+## The actions of a plugin, in the order the detail panel shows them.
+func _actions_for(state: LoadoutManager.PluginState) -> Array[Dictionary]:
+	_collected_actions = []
 	_add_actions(state)
+	var actions := _collected_actions
+	_collected_actions = []
+	return actions
+
+
+## The available primary action (install, update), {} when the plugin has none.
+func _primary_action(state: LoadoutManager.PluginState) -> Dictionary:
+	for action in _actions_for(state):
+		if action["primary"] and action["available"]:
+			return action
+	return {}
+
+
+func _primary_action_hint(state: LoadoutManager.PluginState) -> String:
+	var action := _primary_action(state)
+	return "nothing to do" if action.is_empty() else str(action["text"]).trim_suffix("…").to_lower()
+
+
+func _on_item_activated() -> void:
+	var state := manager.get_state(_selected_id)
+	if state == null or _busy:
+		return
+	var action := _primary_action(state)
+	if not action.is_empty():
+		_run(action["callable"])
+
+
+func _on_item_mouse_selected(mouse_position: Vector2, button_index: int) -> void:
+	if button_index != MOUSE_BUTTON_RIGHT:
+		return
+	var item := _tree.get_item_at_position(mouse_position)
+	if item == null:
+		return
+	if item.get_metadata(0) != _selected_id:
+		item.select(0)
+	var state := manager.get_state(_selected_id)
+	if state == null:
+		return
+	_menu_actions = _actions_for(state)
+	_context_menu.clear()
+	for index in _menu_actions.size():
+		_context_menu.add_item(_menu_actions[index]["text"], index)
+		_context_menu.set_item_disabled(index, _busy or not _menu_actions[index]["available"])
+	_context_menu.reset_size()
+	_context_menu.position = Vector2i(_tree.get_screen_position() + mouse_position)
+	_context_menu.popup()
 
 
 func _add_actions(state: LoadoutManager.PluginState) -> void:
@@ -850,16 +915,21 @@ func _on_item_selected() -> void:
 	_update_detail()
 
 
-## available false: the button stays disabled (nothing to install), also when an action ends.
-func _action(text: String, callable: Callable, primary: bool = false, available: bool = true) -> Button:
+## Adds an action of the plugin _actions_for() collects. available false: shown, but disabled
+## (nothing to install), also when an action ends.
+func _action(text: String, callable: Callable, primary: bool = false, available: bool = true) -> void:
+	_collected_actions.append({ "text": text, "callable": callable, "primary": primary, "available": available })
+
+
+func _action_button(action: Dictionary) -> Button:
 	var button := Button.new()
-	button.text = text
-	button.set_meta(UNAVAILABLE_META, not available)
-	button.disabled = _busy or not available
-	if primary:
+	button.text = action["text"]
+	button.set_meta(UNAVAILABLE_META, not action["available"])
+	button.disabled = _busy or not action["available"]
+	if action["primary"]:
 		button.add_theme_color_override("font_color", _theme_color("accent_color", Color(0.44, 0.73, 0.98)))
+	var callable: Callable = action["callable"]
 	button.pressed.connect(func() -> void: _run(callable))
-	_detail_actions.add_child(button)
 	return button
 
 
