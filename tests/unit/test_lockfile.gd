@@ -55,8 +55,29 @@ func test_invalid_entries_are_skipped() -> void:
 	check(result["ok"], "file still loads")
 	var lock: Lockfile = result["lockfile"]
 	check_eq(lock.plugins.keys(), ["ok"], "only valid entry kept")
-	check_eq(lock.ignored, PackedStringArray(["x"]), "non-string ignored ids dropped")
+	check_eq(lock.ignored, PackedStringArray(["x"]), "non-string ignored ids are not used")
 	check_eq(lock.warnings.size(), 6, "warning per problem")
+
+
+func test_unreadable_entries_survive_a_save() -> void:
+	var dir := temp_dir("lock_unreadable")
+	var path := dir.path_join("loadout.lock.json")
+	var lock: Lockfile = Lockfile.from_dict({ "schema": 1, "plugins": {
+		"ok": { "version": "1.0.0" },
+		"git": { "version": "a1b2c3d", "commit": true },
+		"other": { "version": "latest" },
+	}, "ignored": ["x", 5] })["lockfile"]
+	check_eq(lock.plugins.keys(), ["ok"], "only the readable entry is used")
+	lock.set_installed("other", "2.0.0", "sha256:2", "2026-11-04")
+	check(lock.remove("ok"), "remove a readable entry")
+	check_eq(lock.save_file(path), OK, "saved")
+	var saved: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(path))
+	check_eq(saved["plugins"]["git"], { "version": "a1b2c3d", "commit": true }, "the unreadable entry is written back unchanged")
+	check_eq(saved["plugins"]["other"]["version"], "2.0.0", "an install replaces an unreadable entry")
+	check(not saved["plugins"].has("ok"), "removed")
+	check_eq(saved["ignored"], ["x", 5.0], "an unreadable ignored value stays")
+	check(lock.remove("git"), "an unreadable entry can be removed")
+	check(not lock.to_dict()["plugins"].has("git"), "and is gone then")
 
 
 func test_set_installed_keeps_pin() -> void:

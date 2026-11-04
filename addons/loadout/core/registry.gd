@@ -3,7 +3,8 @@ class_name LoadoutRegistry
 extends RefCounted
 
 ## Global registry of plugins every project should have (loadout_registry.json in the editor
-## config dir). Invalid entries are skipped with a warning instead of failing the whole file.
+## config dir). Invalid entries are skipped with a warning instead of failing the whole file, and
+## written back unchanged when the registry is saved.
 
 const JsonStore := preload("../util/json_store.gd")
 
@@ -59,6 +60,9 @@ static var _regex_cache: Dictionary[String, RegEx] = {}
 var entries: Array[Entry] = []
 ## Top-level fields this version does not know, kept when saving.
 var extra: Dictionary = {}
+## Raw entries that did not parse (a source type or range of a newer Loadout, or a typo). They are
+## written back unchanged, so saving here never drops what another Loadout version can read.
+var skipped: Array = []
 ## Problems found while parsing, for the dock.
 var warnings: PackedStringArray = []
 
@@ -77,9 +81,10 @@ static func from_dict(data: Variant) -> Dictionary:
 		if key != "schema" and key != "plugins":
 			registry.extra[key] = data[key]
 	for item: Variant in plugins:
-		var error := registry.add_entry(item)
+		var error := registry._add(item, false)
 		if error != "":
-			registry.warnings.append(error)
+			registry.warnings.append(error + " It stays in the file unchanged.")
+			registry.skipped.append(item)
 	return { "ok": true, "error": "", "registry": registry }
 
 
@@ -133,9 +138,10 @@ func save_file(path: String) -> Error:
 
 
 func to_dict() -> Dictionary:
-	var plugins: Array[Dictionary] = []
+	var plugins: Array = []
 	for entry in entries:
 		plugins.append(entry.to_dict())
+	plugins.append_array(skipped.duplicate(true))
 	var data := extra.duplicate(true)
 	data.merge({ "schema": SCHEMA, "plugins": plugins }, true)
 	return data
@@ -150,6 +156,12 @@ func get_entry(id: String) -> Entry:
 
 ## Adds a raw entry. Returns "" on success, otherwise an error message.
 func add_entry(data: Variant) -> String:
+	return _add(data, true)
+
+
+## check_skipped: also refuse the id or folder of an entry this version cannot read (it is still in
+## the file); off while the file itself is parsed, so a broken entry does not hide a valid one.
+func _add(data: Variant, check_skipped: bool) -> String:
 	var parsed := parse_entry(data)
 	if not parsed["ok"]:
 		return parsed["error"]
@@ -159,7 +171,23 @@ func add_entry(data: Variant) -> String:
 			return "Plugin %s: the id is already in the registry." % entry.id
 		if existing.folder.to_lower() == entry.folder.to_lower():
 			return "Plugin %s: folder %s is already used by %s." % [entry.id, entry.folder, existing.id]
+	if check_skipped:
+		var unreadable := _skipped_using(entry.id, entry.folder)
+		if unreadable != "":
+			return "Plugin %s: the registry file already has an entry %s that this Loadout version cannot read." % [entry.id, unreadable]
 	entries.append(entry)
+	return ""
+
+
+## Id of a skipped raw entry with this id or folder, "" when there is none.
+func _skipped_using(id: String, folder: String) -> String:
+	for raw: Variant in skipped:
+		if typeof(raw) != TYPE_DICTIONARY:
+			continue
+		var raw_id := str(raw.get("id", ""))
+		var raw_folder := str(raw.get("folder", raw_id))
+		if (id != "" and raw_id == id) or raw_folder.to_lower() == folder.to_lower():
+			return raw_id
 	return ""
 
 
@@ -196,6 +224,9 @@ func set_folder(id: String, folder: String) -> String:
 	for other in entries:
 		if other != entry and other.folder.to_lower() == folder.to_lower():
 			return "Folder %s is already used by %s." % [folder, other.id]
+	var unreadable := _skipped_using("", folder)
+	if unreadable != "":
+		return "Folder %s is already used by %s (an entry this Loadout version cannot read)." % [folder, unreadable]
 	entry.folder = folder
 	return ""
 

@@ -100,6 +100,31 @@ func test_duplicates_are_skipped() -> void:
 	check_eq(registry.warnings.size(), 2, "duplicate id and duplicate folder reported")
 
 
+func test_unreadable_entries_survive_a_save() -> void:
+	var dir := temp_dir("registry_unreadable")
+	var path := dir.path_join("loadout_registry.json")
+	var newer := { "id": "b", "folder": "b_folder", "source": { "type": "gitlab", "project": "x/y" }, "release_id": 7 }
+	var new_range := _entry({ "id": "c", "folder": "c", "range": ">=1.2 <2" })
+	write_text(path, JSON.stringify({ "schema": 1, "count": 5, "plugins": [_entry({ "id": "a", "folder": "a" }), newer, new_range, "not an object"] }))
+	var registry: Registry = Registry.load_file(path)["registry"]
+	check_eq(registry.entries.size(), 1, "only the readable entry is used")
+	check_eq(registry.warnings.size(), 3, "warning per unreadable entry")
+	check(registry.warnings[0].contains("stays in the file"), "the warning says nothing is lost: %s" % registry.warnings[0])
+	check(registry.add_entry(_entry({ "id": "b", "folder": "other" })) != "", "the id of an unreadable entry is taken")
+	check(registry.add_entry(_entry({ "id": "other", "folder": "B_folder" })) != "", "so is its folder")
+	check(registry.set_folder("a", "c") != "", "set_folder respects it too")
+	check_eq(registry.add_entry(_entry({ "id": "d", "folder": "d" })), "", "other entries can be added")
+	check_eq(registry.save_file(path), OK, "saved")
+	var text := FileAccess.get_file_as_string(path)
+	var saved: Dictionary = JSON.parse_string(text)
+	var plugins: Array = saved["plugins"]
+	check_eq(plugins.size(), 5, "nothing dropped")
+	check(plugins.has(JSON.parse_string(JSON.stringify(newer))), "the newer source type is written back unchanged")
+	check(plugins.has(JSON.parse_string(JSON.stringify(new_range))), "and so is the unknown range")
+	check(plugins.has("not an object"), "and the broken item")
+	check(text.contains("\"count\": 5,") and text.contains("\"release_id\": 7"), "whole numbers stay whole: %s" % text)
+
+
 func test_add_and_remove() -> void:
 	var registry := _from_entries([])
 	check_eq(registry.add_entry(_entry({ "id": "a", "folder": "a" })), "", "add valid")

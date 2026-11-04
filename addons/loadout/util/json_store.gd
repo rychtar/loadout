@@ -50,13 +50,34 @@ static func write(path: String, data: Dictionary, schema: int) -> Error:
 	var file := FileAccess.open(tmp_path, FileAccess.WRITE)
 	if file == null:
 		return FileAccess.get_open_error()
-	file.store_string(JSON.stringify(data, "\t") + "\n")
+	file.store_string(JSON.stringify(whole_numbers(data), "\t") + "\n")
 	err = file.get_error()
 	file.close()
 	if err != OK:
 		DirAccess.remove_absolute(tmp_path)
 		return err
 	return DirAccess.rename_absolute(tmp_path, path)
+
+
+## JSON has one number type and Godot reads every number as a float, which it writes back as "5.0".
+## Whole numbers become ints again, so fields kept for other Loadout versions do not change.
+static func whole_numbers(value: Variant) -> Variant:
+	match typeof(value):
+		TYPE_FLOAT:
+			var number: float = value
+			if is_finite(number) and number == floorf(number) and absf(number) < 9.0e15:
+				return int(number)
+		TYPE_DICTIONARY:
+			var converted := {}
+			for key: Variant in value:
+				converted[key] = whole_numbers(value[key])
+			return converted
+		TYPE_ARRAY:
+			var converted := []
+			for item: Variant in value:
+				converted.append(whole_numbers(item))
+			return converted
+	return value
 
 
 static func _inspect(path: String, schema: int) -> Dictionary:
