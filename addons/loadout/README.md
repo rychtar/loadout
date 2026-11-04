@@ -42,8 +42,9 @@ through Godot: `godot --headless --path <this repository> --script res://tools/i
 
 ## Usage
 
-Everything is in the **Loadout** dock on the right side of the editor. Drag a column border in the
-plugin list to resize it, double-click it to fit the column to its text.
+Everything is in the **Loadout** dock on the right side of the editor. Right-click a plugin for all its
+actions, double-click it to install or update it. Drag a column border in the plugin list to resize it,
+double-click it to fit the column to its text; drag the border above the detail to share the height.
 
 - **Add a plugin**: **+** searches the Asset Store, takes a GitHub repository (`owner/name`) or a
   local folder with `plugin.cfg`. Allowed versions: `*` (newest), `^1.2.0` (minor and patch
@@ -57,8 +58,8 @@ plugin list to resize it, double-click it to fit the column to its text.
   release, and installing an older one pins it.
 - **Modified** means the folder differs from the lock: **Accept changes** keeps your edits,
   **Overwrite** replaces them (with a backup).
-- **Remove from project…** deletes the folder (with a backup) and ignores the plugin here.
-  **Remove from registry…** stops offering it in all projects. **⋮** exports and imports the registry.
+- **Remove** ▾ **from project…** deletes the folder (with a backup) and ignores the plugin here.
+  **from registry…** stops offering it in all projects. **⋮** exports and imports the registry.
 
 ## How updates work
 
