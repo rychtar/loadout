@@ -243,6 +243,29 @@ func test_uninstall() -> void:
 	check(not again["ok"], "nothing to remove")
 
 
+func test_failed_uninstall_puts_the_plugin_back() -> void:
+	_setup("uninstall_fails")
+	if OS.get_name() == "Windows":
+		return # relies on a read-only folder blocking the delete, as a locked file does
+	await _install_base()
+	await editor.set_plugin_enabled("fake_a", true)
+	DirAccess.make_dir_recursive_absolute(_target().path_join("data"))
+	write_text(_target().path_join("data/notes.txt"), "kept")
+	var before := Fs.hash_dir(_target())
+	editor.calls.clear()
+	# The files next to data/ are deleted first, then the read-only folder stops the delete half way.
+	var locked := ProjectSettings.globalize_path(_target().path_join("data"))
+	OS.execute("chmod", ["555", locked])
+	var result: Dictionary = await installer.uninstall(entry)
+	OS.execute("chmod", ["755", locked])
+	check(not result["ok"], "failed")
+	check(result["restored"] and not result["restart_recommended"], "restored: %s" % result["error"])
+	check_eq(Fs.hash_dir(_target()), before, "every file is back")
+	check(editor.is_plugin_enabled("fake_a"), "enabled again")
+	check_eq(editor.calls, PackedStringArray(["disable fake_a", "scan", "refresh", "enable fake_a", "save"]), "editor steps")
+	check(not events.has("removed fake_a"), "no removed signal")
+
+
 func test_installer_stays_in_addons_dir() -> void:
 	_setup("paths")
 	check_eq(installer.target_dir(entry), addons.path_join("fake_a"), "target under the configured addons dir")

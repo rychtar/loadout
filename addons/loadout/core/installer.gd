@@ -228,22 +228,38 @@ func list_backups(entry: LoadoutRegistry.Entry) -> Array[Dictionary]:
 
 ## Disables and removes the plugin folder (a backup is kept). A folder with native code is only
 ## deleted, the loaded library goes away with the next editor restart ("restart_recommended").
-## Returns { "ok", "error", "id", "backup_path", "native", "restart_recommended" }.
+## When the folder cannot be removed, the backup is copied back over what is left and the plugin is
+## enabled again ("restored"); if even that fails, "restart_recommended" is set.
+## Returns { "ok", "error", "id", "backup_path", "native", "restored", "restart_recommended" }.
 func uninstall(entry: LoadoutRegistry.Entry, lock_entry: LoadoutLockfile.Entry = null) -> Dictionary:
-	var result := { "ok": false, "error": "", "id": entry.id, "backup_path": "", "native": false, "restart_recommended": false }
+	var result := { "ok": false, "error": "", "id": entry.id, "backup_path": "", "native": false, "restored": false, "restart_recommended": false }
 	var target := target_dir(entry)
 	if not DirAccess.dir_exists_absolute(target):
 		result["error"] = "Plugin %s is not installed." % entry.id
 		return result
 	var native := Package.is_native(target)
-	if editor.is_plugin_enabled(entry.folder):
+	var was_enabled := editor.is_plugin_enabled(entry.folder)
+	if was_enabled:
 		await editor.set_plugin_enabled(entry.folder, false)
 	var backup := _backup_path(entry, _new_result(entry, "", lock_entry)["from"])
 	var err := _copy_fresh(target, backup)
-	if err == OK:
-		err = Fs.remove_dir(target)
 	if err != OK:
-		result["error"] = "Removing %s failed: %s" % [entry.id, error_string(err)]
+		# Nothing was deleted yet: drop the partial backup and leave the plugin as it was.
+		Fs.remove_dir(backup)
+		if was_enabled:
+			await editor.set_plugin_enabled(entry.folder, true)
+		result["error"] = "Removing %s failed, the backup could not be made: %s" % [entry.id, error_string(err)]
+		Log.write(result["error"], Log.Level.ERROR)
+		return result
+	err = Fs.remove_dir(target)
+	if err != OK:
+		result["error"] = "Removing %s failed: %s." % [entry.id, error_string(err)]
+		result["restored"] = await _restore_remains(entry, backup, was_enabled, native)
+		if result["restored"]:
+			result["error"] += " The plugin is back as it was."
+		else:
+			result["restart_recommended"] = true
+			result["error"] += " Some files are gone and restoring them failed, restart the editor. Backup: %s" % backup
 		Log.write(result["error"], Log.Level.ERROR)
 		return result
 	if native:
@@ -428,6 +444,28 @@ func _restore(entry: LoadoutRegistry.Entry, backup: String, enable: bool) -> boo
 	if not await editor.scan():
 		return false
 	if editor.refresh_scripts(target) != OK:
+		return false
+	var ok := true
+	if enable:
+		await editor.set_plugin_enabled(entry.folder, true)
+		ok = editor.is_plugin_running(entry.folder)
+	editor.save_project_settings()
+	return ok
+
+
+## Copies the backup over what a failed delete left (files that could not be deleted stay) and
+## enables the plugin again. A folder with native code is not scanned (see _install_native()).
+func _restore_remains(entry: LoadoutRegistry.Entry, backup: String, enable: bool, native: bool) -> bool:
+	var target := target_dir(entry)
+	var err := Fs.copy_dir(backup, target)
+	if err != OK:
+		Log.write("Restoring %s from %s failed: %s" % [entry.id, backup, error_string(err)], Log.Level.ERROR)
+		return false
+	if native:
+		if enable:
+			await editor.set_plugin_enabled(entry.folder, true)
+		return true
+	if not await editor.scan() or editor.refresh_scripts(target) != OK:
 		return false
 	var ok := true
 	if enable:
