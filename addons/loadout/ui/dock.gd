@@ -776,8 +776,29 @@ func _handle_result(result: Variant) -> void:
 ## cancels any coroutine still running. The short delay lets the action that asked for it finish
 ## and the dock redraw first.
 func _scan_soon() -> void:
-	get_tree().create_timer(SCAN_DELAY_S).timeout.connect(
-			func() -> void: EditorInterface.get_resource_filesystem().scan(), CONNECT_ONE_SHOT)
+	get_tree().create_timer(SCAN_DELAY_S).timeout.connect(_scan_now, CONNECT_ONE_SHOT)
+
+
+func _scan_now() -> void:
+	EditorInterface.get_resource_filesystem().scan()
+	get_tree().create_timer(SCAN_DELAY_S).timeout.connect(_after_scan, CONNECT_ONE_SHOT)
+
+
+## Timers, not a coroutine, wait for the scan: the script reload it causes would cancel an await.
+func _after_scan() -> void:
+	if not is_inside_tree():
+		return
+	var next := _after_scan if EditorInterface.get_resource_filesystem().is_scanning() else _enable_scanned
+	get_tree().create_timer(SCAN_DELAY_S).timeout.connect(next, CONNECT_ONE_SHOT)
+
+
+## Native add-ons with an EditorPlugin are enabled once their library is loaded.
+func _enable_scanned() -> void:
+	if not is_inside_tree():
+		return
+	var problems: PackedStringArray = await manager.enable_scanned_plugins()
+	if not problems.is_empty():
+		_show_alert("\n".join(problems))
 
 
 func _offer_restart() -> void:

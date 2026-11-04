@@ -149,6 +149,16 @@ static func first_class_used(source: String, names: PackedStringArray) -> String
 	return ""
 
 
+## The editor reads editor_plugins/enabled again whenever a plugin is toggled, so the entry stays.
+func enable_on_restart(folder: String) -> Error:
+	var path := ADDONS_DIR.path_join(folder).path_join("plugin.cfg")
+	var enabled := PackedStringArray(ProjectSettings.get_setting("editor_plugins/enabled", PackedStringArray()))
+	if not enabled.has(path):
+		enabled.append(path)
+		ProjectSettings.set_setting("editor_plugins/enabled", enabled)
+	return ProjectSettings.save()
+
+
 func save_project_settings() -> Error:
 	return ProjectSettings.save()
 

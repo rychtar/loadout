@@ -870,6 +870,49 @@ func test_removing_a_native_addon_asks_for_a_restart() -> void:
 	check(_saved_lock().ignored.has("fake_ext"), "not brought back by the next sync")
 
 
+## fake_ext packages that also have a plugin.cfg (an EditorPlugin on top of the extension).
+func _fake_ext_with_plugin(id: String, versions: Array[String]) -> FakeSource:
+	var packages := temp_dir("manager_%s_packages" % id)
+	var map: Dictionary[String, String] = {}
+	for version in versions:
+		var dir := packages.path_join(version)
+		Fs.copy_dir(EXT_FIXTURES.path_join(version), dir)
+		write_text(dir.path_join("plugin.cfg"), "[plugin]\nname=\"Fake Ext\"\nversion=\"%s\"\nscript=\"plugin.gd\"\n" % version)
+		write_text(dir.path_join("plugin.gd"), "@tool\nextends EditorPlugin\n")
+		map[version] = dir
+	var source := FakeSource.new(map)
+	fake_sources[id] = source
+	return source
+
+
+func test_native_plugin_is_enabled_after_the_scan() -> void:
+	_setup("native_plugin", [_ext()])
+	_fake_ext_with_plugin("fake_ext", ["1.0.0"])
+	await manager.refresh()
+	var summary: Dictionary = await manager.install_missing()
+	check_eq(summary["installed"], PackedStringArray(["fake_ext"]), "installed: %s" % summary["failed"])
+	check(not editor.calls.has("enable fake_ext"), "not enabled before the scan loads the library")
+	check_eq(await manager.enable_scanned_plugins(), PackedStringArray(), "no problems")
+	check(editor.is_plugin_enabled("fake_ext"), "enabled after the scan")
+	check(editor.calls.has("save"), "project.godot saved")
+	await manager.enable_scanned_plugins()
+	check_eq(editor.calls.count("enable fake_ext"), 1, "enabled once")
+
+
+func test_native_plugin_put_back_while_its_library_is_loaded_is_enabled_on_restart() -> void:
+	_setup("native_plugin_back", [_ext()])
+	_fake_ext_with_plugin("fake_ext", ["1.0.0"])
+	await manager.refresh()
+	await manager.install_missing()
+	await manager.enable_scanned_plugins()
+	check((await manager.uninstall("fake_ext"))["ok"], "removed")
+	var result: Dictionary = await manager.install("fake_ext")
+	check(result["ok"] and result["restart_recommended"], "the old library is still loaded: %s" % result["error"])
+	check(editor.calls.has("enable_on_restart fake_ext"), "the plugin starts with the next editor start")
+	check_eq(await manager.enable_scanned_plugins(), PackedStringArray(), "nothing waits for a scan")
+	check_eq(editor.calls.count("enable fake_ext"), 1, "not enabled again now")
+
+
 func test_one_scan_after_a_batch_of_native_installs() -> void:
 	_setup("native_batch", [_ext("fake_ext"), _ext("fake_ext2")])
 	_fake_ext("fake_ext", ["1.0.0"])

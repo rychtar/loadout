@@ -90,6 +90,9 @@ var _scan_pending := false
 ## Add-ons with native code whose files were replaced or deleted while the editor runs: the old
 ## library stays loaded, so putting files back needs a restart, not a scan.
 var _native_changed: Dictionary[String, bool] = {}
+## Native add-ons with a plugin.cfg installed fresh: their EditorPlugin is enabled after the scan
+## (enable_scanned_plugins()).
+var _enable_pending: PackedStringArray = []
 ## Installs running as one batch (install_missing()): the scan waits for the last one.
 var _batch_depth := 0
 
@@ -856,6 +859,29 @@ func _note_native_result(id: String, result: Dictionary) -> void:
 		_native_changed[id] = true
 	result["scan_wanted"] = scan
 	_scan_pending = _scan_pending or scan
+	if result.get("enable_after_scan", false):
+		var state := get_state(id)
+		if scan:
+			if not _enable_pending.has(id):
+				_enable_pending.append(id)
+		elif state != null and state.entry != null:
+			installer.enable_on_restart(state.entry)
+
+
+## Enables the EditorPlugin of every native add-on that waited for the scan scan_requested asked for.
+## The dock calls it once the scan is over. Returns the problems, one per plugin that did not start.
+func enable_scanned_plugins() -> PackedStringArray:
+	var problems: PackedStringArray = []
+	var ids := _enable_pending.duplicate()
+	_enable_pending.clear()
+	for id in ids:
+		var state := get_state(id)
+		if state == null or state.entry == null:
+			continue
+		var problem: String = await installer.enable_after_scan(state.entry)
+		if problem != "":
+			problems.append(problem)
+	return problems
 
 
 ## Asks for the scan once no batch is running.

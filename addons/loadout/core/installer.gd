@@ -84,7 +84,9 @@ func check_overwrite(entry: LoadoutRegistry.Entry, lock_entry: LoadoutLockfile.E
 ## - installed over files already there (an update): the library may be loaded and cannot be swapped
 ##   in a running editor, so "restart_recommended" is set.
 ## - installed fresh: "scan_wanted" is set. The caller scans once it has nothing else running, and
-##   Godot then loads the new extension itself.
+##   Godot then loads the new extension itself. A package that also has a plugin.cfg sets
+##   "enable_after_scan": its EditorPlugin may use the extension's classes, so the caller enables it
+##   with enable_after_scan() once the scan is over (or enable_on_restart() when it restarts instead).
 ## "from" is the version in the lock when the folder has no plugin.cfg to say.
 func install(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: String,
 		lock_entry: LoadoutLockfile.Entry = null, force: bool = false, enable: bool = true) -> Dictionary:
@@ -115,7 +117,7 @@ func install(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: Strin
 	_preserve_uids(target_dir(entry), staged)
 
 	if Package.is_native(staged):
-		await _install_native(entry, staged, result)
+		await _install_native(entry, staged, enable, result)
 	elif is_installed(entry):
 		await _replace(entry, staged, result)
 	else:
@@ -175,6 +177,30 @@ func self_update(entry: LoadoutRegistry.Entry, source: LoadoutSource, version: S
 	Log.write("Loadout updated %s -> %s, restarting the editor." % [result["from"], version])
 	plugin_updated.emit(entry.id, result["from"], version)
 	return result
+
+
+## Enables the EditorPlugin of a native add-on installed fresh, once the scan loaded its library
+## (see install(), "enable_after_scan"). Returns "" or the problem. A plugin that does not start stays
+## in project.godot, so it starts with the next editor start.
+func enable_after_scan(entry: LoadoutRegistry.Entry) -> String:
+	var target := target_dir(entry)
+	if not Package.has_plugin_cfg(target):
+		return "Plugin %s is no longer installed." % entry.id
+	if not editor.is_plugin_running(entry.folder):
+		await editor.set_plugin_enabled(entry.folder, true)
+	editor.save_project_settings()
+	if editor.is_plugin_running(entry.folder):
+		Log.write("Enabled %s." % entry.id)
+		return ""
+	var problem := "Plugin %s did not start, it is enabled for the next editor start." % entry.id
+	Log.write(problem, Log.Level.WARNING)
+	return problem
+
+
+## Enables the EditorPlugin of a native add-on with the next editor start, without loading it now
+## (its library is not loaded yet).
+func enable_on_restart(entry: LoadoutRegistry.Entry) -> Error:
+	return editor.enable_on_restart(entry.folder)
 
 
 ## Backups of the plugin, newest first: [{ "path", "name" (folder name), "version" (from its
@@ -282,7 +308,7 @@ func _install_fresh(entry: LoadoutRegistry.Entry, staged: String, enable: bool, 
 ## loaded stays in memory (the old one keeps running), so a replacement is not scanned at all and
 ## reports "restart_recommended": Godot would deinitialize it under the running editor.
 ## On failure the old files come back. On Windows a loaded library is locked and cannot be replaced.
-func _install_native(entry: LoadoutRegistry.Entry, staged: String, result: Dictionary) -> void:
+func _install_native(entry: LoadoutRegistry.Entry, staged: String, enable: bool, result: Dictionary) -> void:
 	result["native"] = true
 	var target := target_dir(entry)
 	var backup := ""
@@ -306,6 +332,7 @@ func _install_native(entry: LoadoutRegistry.Entry, staged: String, result: Dicti
 		return
 	if backup == "":
 		result["scan_wanted"] = true
+		result["enable_after_scan"] = enable and Package.has_plugin_cfg(target)
 	else:
 		result["restart_recommended"] = true
 	result["ok"] = true
@@ -501,6 +528,7 @@ func _new_result(entry: LoadoutRegistry.Entry, version: String, lock_entry: Load
 		"ok": false, "error": "", "id": entry.id, "from": installed, "to": version,
 		"hash": "", "backup_path": "", "restored": false, "restart_recommended": false, "needs_confirmation": "",
 		"warning": "", "package_folder": "", "load_failed": false, "native": false, "scan_wanted": false,
+		"enable_after_scan": false,
 	}
 
 

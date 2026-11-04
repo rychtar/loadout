@@ -42,6 +42,12 @@ func validate_scripts(_dir: String) -> Error:
 	return OK
 
 
+## Adds the plugin to the enabled plugins in project.godot without loading it now (it starts with the
+## next editor start) and saves project.godot.
+func enable_on_restart(_folder: String) -> Error:
+	return OK
+
+
 ## set_plugin_enabled() only queues the project.godot save, this writes it now.
 func save_project_settings() -> Error:
 	return OK

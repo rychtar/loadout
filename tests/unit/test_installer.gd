@@ -377,8 +377,17 @@ func test_native_package_with_a_plugin_cfg_is_not_toggled_either() -> void:
 	check(result["ok"], "ok: %s" % result["error"])
 	check_eq(installer.installed_version(ext_entry), "1.0.0", "version read from plugin.cfg when there is one")
 	check(not editor.calls.has("enable fake_ext") and not editor.calls.has("validate"),
-			"the native part cannot be swapped under a running editor: files now, plugin after the restart")
-	check(result["native"], "native")
+			"nothing is enabled before the scan loads the library")
+	check(result["native"] and result["scan_wanted"], "native, scanned by the caller")
+	check(result["enable_after_scan"], "the caller enables the plugin after the scan")
+	check_eq(await installer.enable_after_scan(ext_entry), "", "enabled after the scan")
+	check(editor.calls.has("enable fake_ext") and editor.is_plugin_enabled("fake_ext"), "its EditorPlugin runs")
+
+
+func test_native_package_without_a_plugin_cfg_is_never_enabled() -> void:
+	_setup_ext("native_only")
+	var result: Dictionary = await installer.install(ext_entry, source, "1.0.0")
+	check(result["ok"] and not result["enable_after_scan"], "nothing to enable: %s" % result["error"])
 
 
 func test_package_without_plugin_cfg_or_extension_is_refused() -> void:
