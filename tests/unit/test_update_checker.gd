@@ -142,3 +142,16 @@ func test_in_memory_checker() -> void:
 	memory.load_cache()
 	await memory.load_releases(source)
 	check_eq(memory.save_cache(), OK, "no file, no error")
+
+
+func test_last_answer_is_the_newest_successful_check() -> void:
+	_setup("last_answer")
+	check_eq(checker.last_answer_at(), 0, "no answer yet")
+	await checker.load_releases(source)
+	check_eq(checker.last_answer_at(), now, "the answer time")
+	source.fail_list = "Cannot connect."
+	checker.save_cache()
+	now += DAY
+	checker = _new_checker()
+	await checker.load_releases(source)
+	check_eq(checker.last_answer_at(), now - DAY, "a failed check is not an answer")

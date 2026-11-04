@@ -171,6 +171,11 @@ func update_ids() -> PackedStringArray:
 	return ids
 
 
+## Unix time of the newest answer a remote source gave, 0 when none did yet.
+func last_update_check() -> int:
+	return checker.last_answer_at()
+
+
 ## Source of the plugin from the last refresh (null before the first refresh).
 func get_source(id: String) -> LoadoutSource:
 	return _sources.get(id)

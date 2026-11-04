@@ -75,6 +75,14 @@ func is_due(key: String) -> bool:
 	return age < 0 or age >= CHECK_INTERVAL_S
 
 
+## Unix time of the newest answer a remote source gave (0 when none answered yet), for the dock.
+func last_answer_at() -> int:
+	var newest := 0
+	for key: String in _sources:
+		newest = maxi(newest, int(_sources[key].get("updated_at", 0)))
+	return newest
+
+
 ## The cache entry when it has the expected shape, otherwise {} (a hand-edited file must not crash).
 static func _valid_entry(raw: Variant) -> Dictionary:
 	if typeof(raw) != TYPE_DICTIONARY:

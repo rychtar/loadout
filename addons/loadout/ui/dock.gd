@@ -73,6 +73,7 @@ var store_search: Callable
 var auto_restart := true
 
 var _info_label: Label
+var _check_button: Button
 var _problems_label: Label
 var _install_missing_button: Button
 var _update_all_button: Button
@@ -250,7 +251,8 @@ func _build() -> void:
 	_info_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_info_label.clip_text = true
 	header.add_child(_info_label)
-	header.add_child(_icon_button("Reload", "Check for updates (asks the sources now, not once a day)", func() -> void: _run(_check_updates)))
+	_check_button = _icon_button("Reload", "", func() -> void: _run(_check_updates))
+	header.add_child(_check_button)
 	header.add_child(_icon_button("Add", "Add a plugin to the global registry", func() -> void: _registry_dialog.open()))
 	var menu := MenuButton.new()
 	menu.flat = true
@@ -400,7 +402,7 @@ func _rebuild() -> void:
 	if _columns_fitted:
 		_fit_columns(true)
 	_rebuild_unregistered()
-	_info_label.text = "Registry: %d · %s" % [manager.registry.entries.size() if manager.registry != null else 0, manager.lock_path.get_file()]
+	_update_header()
 	var problems := manager.errors.duplicate()
 	problems.append_array(manager.warnings)
 	for state in manager.states:
@@ -416,6 +418,47 @@ func _rebuild() -> void:
 	_update_all_button.text = "Update all (%d)…" % updates.size()
 	_update_all_button.visible = updates.size() > 1
 	_update_detail()
+
+
+## Header: how many plugins are in which state; the files and the last update check in the tooltips.
+func _update_header() -> void:
+	var counts := {}
+	for state in manager.states:
+		counts[state.status] = counts.get(state.status, 0) + 1
+	if not manager.loaded:
+		_info_label.text = "Checking…"
+	elif manager.states.is_empty():
+		_info_label.text = "No global plugins yet"
+	else:
+		_info_label.text = status_summary(counts)
+	var now := int(Time.get_unix_time_from_system())
+	var checked := manager.last_update_check()
+	var last := "never" if checked == 0 else time_ago(checked, now)
+	_info_label.tooltip_text = "Registry: %s\nLock: %s\nSources last answered: %s" % [
+			ProjectSettings.globalize_path(manager.registry_path), manager.lock_path, last]
+	_info_label.mouse_filter = Control.MOUSE_FILTER_PASS
+	_check_button.tooltip_text = "Check for updates now (last answer from the sources: %s; they are asked once a day by themselves)" % last
+
+
+## "Up to date 3 · Update 1 · Missing 1" from { Status: count }, in the order of the Status enum.
+static func status_summary(counts: Dictionary) -> String:
+	var parts := PackedStringArray()
+	for status: int in STATUS_TEXT:
+		if counts.get(status, 0) > 0:
+			parts.append("%s %d" % [STATUS_TEXT[status], counts[status]])
+	return " · ".join(parts)
+
+
+## "just now", "5 min ago", "3 h ago", "2 days ago" (a time in the future counts as now).
+static func time_ago(then: int, now: int) -> String:
+	var seconds := now - then
+	if seconds < 60:
+		return "just now"
+	if seconds < 3600:
+		return "%d min ago" % (seconds / 60)
+	if seconds < 48 * 3600:
+		return "%d h ago" % (seconds / 3600)
+	return "%d days ago" % (seconds / 86400)
 
 
 ## Sizes the Status and Version columns to their longest text (all status names, so the width
