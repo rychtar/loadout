@@ -20,9 +20,13 @@ const SMOKE_ARG_PREFIX := "--loadout-smoke="
 const SMOKE_SCRIPT := "res://tests/editor/installer_smoke.gd"
 ## Smoke modes that drive the installer themselves and must not see the startup sync.
 const SMOKE_INSTALLER_MODES: PackedStringArray = ["install", "update", "verify", "remove"]
+## How often the startup waits check whether the editor's first scan is over.
+const STARTUP_POLL_S := 0.5
 
 var _manager: LoadoutManager
 var _dock: Control
+## Polls in a row that found the filesystem idle (the startup sync waits for two).
+var _idle_polls := 0
 
 
 func _enter_tree() -> void:
@@ -46,7 +50,7 @@ func _enter_tree() -> void:
 
 	var smoke_mode := _cmdline_value(SMOKE_ARG_PREFIX)
 	if smoke_mode == "" or not SMOKE_INSTALLER_MODES.has(smoke_mode):
-		_startup_sync.call_deferred()
+		_wait_for_first_scan.call_deferred()
 	if smoke_mode != "":
 		_run_smoke.call_deferred(smoke_mode)
 
@@ -69,12 +73,24 @@ func get_dock() -> Control:
 	return _dock
 
 
+## Starts the startup sync once the editor's first scan is over. A timer polls instead of a coroutine
+## waiting: when an extension did not load at startup, the first scan tries it again and reloads every
+## script, which would cancel the wait (and the sync with it). Two idle polls in a row let that reload
+## pass first.
+func _wait_for_first_scan() -> void:
+	if _manager == null or not is_inside_tree():
+		return
+	_idle_polls = 0 if EditorInterface.get_resource_filesystem().is_scanning() else _idle_polls + 1
+	if _idle_polls < 2:
+		get_tree().create_timer(STARTUP_POLL_S).timeout.connect(_wait_for_first_scan, CONNECT_ONE_SHOT)
+		return
+	_startup_sync()
+
+
 ## Loads registry and lock once the editor finished scanning, offers missing plugins and
 ## announces available updates (remote sources are asked at most once a day).
 func _startup_sync() -> void:
 	var filesystem := EditorInterface.get_resource_filesystem()
-	while filesystem.is_scanning():
-		await get_tree().process_frame
 	if _manager == null:
 		return
 	await _manager.refresh()

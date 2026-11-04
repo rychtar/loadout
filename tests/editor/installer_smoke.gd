@@ -596,6 +596,7 @@ func _native_check() -> void:
 ## Second session after native --loadout-keep: the add-ons load at startup and their EditorPlugins run.
 func _native_verify_check() -> void:
 	var manager: LoadoutManager = _plugin.get_manager()
+	_expect(manager.loaded, "the startup sync finished although the first scan reloaded every script")
 	await manager.refresh()
 	_expect(not manager.states.is_empty(), "the registry has the add-ons")
 	for state in manager.states:
