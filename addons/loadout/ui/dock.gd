@@ -227,7 +227,9 @@ func _install_chosen(ids: PackedStringArray, starters: PackedStringArray, ignore
 			notes.append("•  %s skipped: %s" % [id, added["skipped"][id]])
 	var result := await _install_selected(to_install, ignore)
 	if result.get("ok", false) and not notes.is_empty():
+		# Skipped starters are worth reading, not a passing toast.
 		result["info"] = "\n".join(notes)
+		result["modal"] = true
 	return result
 
 
@@ -360,7 +362,10 @@ func _build() -> void:
 	_export_dialog.current_file = "loadout_registry.json"
 	_export_dialog.file_selected.connect(func(path: String) -> void:
 		var err := manager.export_registry(path)
-		_show_alert("Registry saved to %s." % path if err == OK else "Export failed: %s" % error_string(err)))
+		if err == OK:
+			_toast("Registry saved to %s." % path)
+		else:
+			_show_alert("Export failed: %s" % error_string(err)))
 	base.add_child(_export_dialog)
 	_import_dialog = _file_dialog(EditorFileDialog.FILE_MODE_OPEN_FILE, "Import registry")
 	_import_dialog.file_selected.connect(func(path: String) -> void: _run(_import_registry.bind(path), "Importing the registry"))
@@ -706,7 +711,10 @@ func _add_actions(state: LoadoutManager.PluginState) -> void:
 			_action("Unpin", func() -> Error: return await manager.set_pinned(id, false))
 			_remove_action(state)
 		Status.MODIFIED:
-			_action("Show changes…", func() -> Dictionary: return await manager.changed_files(id))
+			_action("Show changes…", func() -> Dictionary:
+				var changes: Dictionary = await manager.changed_files(id)
+				changes["modal"] = true
+				return changes)
 			_action("Accept changes", func() -> Error: return await manager.adopt(id))
 			_overwrite_action(state)
 			_remove_action(state)
@@ -777,7 +785,8 @@ func _import_registry(path: String) -> Dictionary:
 		lines.append("•  %s skipped: %s" % [id, summary["skipped"][id]])
 	for warning: String in summary["warnings"]:
 		lines.append("•  %s" % warning)
-	return { "ok": true, "info": "\n".join(lines) }
+	# Skipped or broken entries stay on screen; a clean import is a toast.
+	return { "ok": true, "info": "\n".join(lines), "modal": lines.size() > 1 }
 
 
 func _on_restart_required() -> void:
@@ -883,9 +892,16 @@ func _handle_result(result: Variant) -> void:
 	match typeof(result):
 		TYPE_DICTIONARY:
 			if result.get("ok", false):
-				var notice := "\n\n".join(PackedStringArray([result.get("info", ""), result.get("warning", "")])).strip_edges()
-				if notice != "":
-					_show_alert(notice)
+				# A warning (files differ from the lock) or something the user asked to read stays until
+				# dismissed; a plain report of what happened is a toast.
+				var info := str(result.get("info", ""))
+				var warning := str(result.get("warning", ""))
+				if warning != "" or result.get("modal", false):
+					var notice := "\n\n".join(PackedStringArray([info, warning])).strip_edges()
+					if notice != "":
+						_show_alert(notice)
+				elif info != "":
+					_toast(info)
 				return
 			# After a confirmation the action is repeated with the version and pin the user chose.
 			var version: String = result.get("version", "")
@@ -982,6 +998,11 @@ func _ask(text: String, ok_text: String, on_confirm: Callable, cancel_text: Stri
 	_on_confirm = on_confirm
 	_confirm.reset_size()
 	_confirm.popup_centered()
+
+
+## A report that needs no answer: the first line in the toast, all of it in its tooltip.
+func _toast(text: String) -> void:
+	EditorInterface.get_editor_toaster().push_toast("Loadout: %s" % text.get_slice("\n", 0), EditorToaster.SEVERITY_INFO, text)
 
 
 func _show_alert(text: String) -> void:
