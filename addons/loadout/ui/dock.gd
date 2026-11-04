@@ -14,6 +14,8 @@ const Status := LoadoutManager.Status
 const NOTES_PREVIEW := 600
 ## Seconds between an install that needs a scan (a new GDExtension) and the scan.
 const SCAN_DELAY_S := 1.0
+## Meta of an action button that stays disabled whether or not an action runs.
+const UNAVAILABLE_META := &"loadout_unavailable"
 
 const STATUS_TEXT := {
 	Status.OK: "Up to date",
@@ -549,8 +551,7 @@ func _add_actions(state: LoadoutManager.PluginState) -> void:
 	var target := state.target_version
 	match state.status:
 		Status.MISSING:
-			var install := _action("Install %s" % target, func() -> Dictionary: return await manager.install(id), true)
-			install.disabled = target == ""
+			_action("Install %s" % target, func() -> Dictionary: return await manager.install(id), true, target != "")
 			_action("Ignore in this project", func() -> Error: return await manager.set_ignored(id, true))
 		Status.IGNORED:
 			_action("Stop ignoring", func() -> Error: return await manager.set_ignored(id, false))
@@ -820,7 +821,7 @@ func _set_busy(busy: bool) -> void:
 	_update_all_button.disabled = busy
 	for child in _detail_actions.get_children():
 		if child is Button:
-			child.disabled = busy
+			child.disabled = busy or child.get_meta(UNAVAILABLE_META, false)
 	# Rows rebuilt while busy (a refresh during an action) were created disabled, so they are reset here too.
 	for row in _unregistered_rows.get_children():
 		for child in row.get_children():
@@ -849,10 +850,12 @@ func _on_item_selected() -> void:
 	_update_detail()
 
 
-func _action(text: String, callable: Callable, primary: bool = false) -> Button:
+## available false: the button stays disabled (nothing to install), also when an action ends.
+func _action(text: String, callable: Callable, primary: bool = false, available: bool = true) -> Button:
 	var button := Button.new()
 	button.text = text
-	button.disabled = _busy
+	button.set_meta(UNAVAILABLE_META, not available)
+	button.disabled = _busy or not available
 	if primary:
 		button.add_theme_color_override("font_color", _theme_color("accent_color", Color(0.44, 0.73, 0.98)))
 	button.pressed.connect(func() -> void: _run(callable))
