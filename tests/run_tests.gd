@@ -3,6 +3,8 @@ extends SceneTree
 ## godot --headless --path . --script res://tests/run_tests.gd
 
 const UNIT_DIR := "res://tests/unit"
+const TestCase := preload("res://tests/test_case.gd")
+const Fs := preload("res://addons/loadout/util/fs.gd")
 
 var _started := false
 
@@ -32,6 +34,7 @@ func _process(_delta: float) -> bool:
 func _run() -> void:
 	var total := 0
 	var failed := 0
+	TestCase.remove_finished_runs()
 	var error_logger := ScriptErrorLogger.new()
 	OS.add_logger(error_logger)
 	for suite_path in _suite_paths():
@@ -59,6 +62,7 @@ func _run() -> void:
 				for failure: String in suite.failures:
 					print("       ", failure)
 	OS.remove_logger(error_logger)
+	Fs.remove_dir(TestCase.run_dir())
 	print("%d tests, %d failed" % [total, failed])
 	quit(1 if failed > 0 else 0)
 

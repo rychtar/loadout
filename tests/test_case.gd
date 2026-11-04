@@ -3,6 +3,7 @@ extends RefCounted
 
 const Fs := preload("res://addons/loadout/util/fs.gd")
 const TEMP_ROOT := "user://loadout_test"
+const RUN_PREFIX := "run_"
 
 var failures: PackedStringArray = []
 
@@ -17,9 +18,25 @@ func check_eq(actual: Variant, expected: Variant, message: String) -> void:
 		failures.append("%s: expected %s, got %s" % [message, var_to_str(expected), var_to_str(actual)])
 
 
-## Returns an empty directory under user://loadout_test/, never res://.
+## Folder of this test run under TEMP_ROOT. Every checkout of the project (worktrees) has the same
+## user:// folder, so runs at the same time must not share their files.
+static func run_dir() -> String:
+	return TEMP_ROOT.path_join("%s%d" % [RUN_PREFIX, OS.get_process_id()])
+
+
+## Deletes the folders of earlier runs whose process has ended (a run that crashed left its files).
+static func remove_finished_runs() -> void:
+	if not DirAccess.dir_exists_absolute(TEMP_ROOT):
+		return
+	for folder in DirAccess.get_directories_at(TEMP_ROOT):
+		var pid := folder.trim_prefix(RUN_PREFIX)
+		if not folder.begins_with(RUN_PREFIX) or not pid.is_valid_int() or not OS.is_process_running(pid.to_int()):
+			Fs.remove_dir(TEMP_ROOT.path_join(folder))
+
+
+## Returns an empty directory under this run's folder in user://loadout_test/, never res://.
 func temp_dir(name: String) -> String:
-	var path := TEMP_ROOT.path_join(name)
+	var path := run_dir().path_join(name)
 	Fs.remove_dir(path)
 	DirAccess.make_dir_recursive_absolute(path)
 	return path
