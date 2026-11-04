@@ -20,6 +20,11 @@ const _TAG_VERSION_PATTERN := "(?:^|[-_/\\s])[vV]?(\\d+(?:\\.\\d+){0,2}(?:-[0-9A
 ## A tag that is a single big number ("nightly-20260105", "build-2024") is a date or build number.
 const MAX_BARE_MAJOR := 1000
 
+## How a release asset's name names the plugin folder (_folder_match()).
+const MATCH_NONE := 0
+const MATCH_PART := 1
+const MATCH_WHOLE := 2
+
 static var _tag_regex: RegEx
 
 var repo: String
@@ -147,24 +152,51 @@ func _parse_release(item: Dictionary) -> Dictionary:
 
 
 ## The release's zip asset (one named after the plugin folder wins, a demo project only when there
-## is nothing else), else the tag's source zip.
+## is nothing else), else the tag's source zip. A name with the folder as a whole word
+## ("gut-9.3.0.zip" for gut) beats one that only contains it ("build-tools.zip" for ui).
 func _package_url(item: Dictionary) -> String:
 	var zips: Array[Dictionary] = []
 	for asset: Variant in item.get("assets", []):
 		if typeof(asset) == TYPE_DICTIONARY and str(asset.get("name", "")).to_lower().ends_with(".zip"):
 			zips.append(asset)
-	var named: Array[Dictionary] = []
+	var whole: Array[Dictionary] = []
+	var partial: Array[Dictionary] = []
 	for asset in zips:
-		if str(asset["name"]).to_lower().contains(folder.to_lower()):
-			named.append(asset)
-	for asset in named:
-		if not _is_demo(str(asset["name"])):
-			return _text(asset.get("browser_download_url"))
-	if not named.is_empty():
-		return _text(named[0].get("browser_download_url"))
+		match _folder_match(str(asset["name"])):
+			MATCH_WHOLE:
+				whole.append(asset)
+			MATCH_PART:
+				partial.append(asset)
+	for named: Array[Dictionary] in [whole, partial]:
+		for asset in named:
+			if not _is_demo(str(asset["name"])):
+				return _text(asset.get("browser_download_url"))
+	for named: Array[Dictionary] in [whole, partial]:
+		if not named.is_empty():
+			return _text(named[0].get("browser_download_url"))
 	if zips.size() == 1:
 		return _text(zips[0].get("browser_download_url"))
 	return _text(item.get("zipball_url"))
+
+
+## How a zip's name names the plugin folder. "_" and "-" count as the same ("debug-draw-3d.zip"
+## for debug_draw_3d).
+func _folder_match(asset_name: String) -> int:
+	var text := asset_name.to_lower().trim_suffix(".zip").replace("_", "-")
+	var wanted := folder.to_lower().replace("_", "-")
+	var at := text.find(wanted)
+	if at == -1:
+		return MATCH_NONE
+	while at != -1:
+		var end := at + wanted.length()
+		if (at == 0 or not _is_word_char(text[at - 1])) and (end == text.length() or not _is_word_char(text[end])):
+			return MATCH_WHOLE
+		at = text.find(wanted, at + 1)
+	return MATCH_PART
+
+
+static func _is_word_char(character: String) -> bool:
+	return (character >= "a" and character <= "z") or (character >= "0" and character <= "9")
 
 
 ## Whether a zip is a sample project built around the plugin, not the plugin itself.

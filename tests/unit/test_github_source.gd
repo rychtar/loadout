@@ -239,6 +239,28 @@ func test_godot_style_tags() -> void:
 	check_eq(with_candidates["version"], "2.6.0-dev.2", "snapshots with the opt-in")
 
 
+func test_asset_named_after_the_whole_folder_wins() -> void:
+	http = FakeHttp.new()
+	source = GithubSource.new("owner/kit", "ui", http)
+	http.respond_json("https://api.github.com/repos/owner/kit/releases?per_page=50", [_release("v1.0.0", { "assets": [
+		{ "name": "build-tools.zip", "browser_download_url": "https://example.com/build.zip" },
+		{ "name": "ui-1.0.0.zip", "browser_download_url": "https://example.com/ui.zip" },
+	] })])
+	var result := await _list()
+	check_eq(result["releases"][0]["download_url"], "https://example.com/ui.zip", "ui-1.0.0, not build-tools")
+
+
+func test_underscore_and_dash_name_the_same_folder() -> void:
+	http = FakeHttp.new()
+	source = GithubSource.new("owner/dd", "debug_draw_3d", http)
+	http.respond_json("https://api.github.com/repos/owner/dd/releases?per_page=50", [_release("v1.0.0", { "assets": [
+		{ "name": "debug-draw-3d_1.0.0.zip", "browser_download_url": "https://example.com/addon.zip" },
+		{ "name": "symbols.zip", "browser_download_url": "https://example.com/symbols.zip" },
+	] })])
+	var result := await _list()
+	check_eq(result["releases"][0]["download_url"], "https://example.com/addon.zip", "debug-draw-3d is debug_draw_3d")
+
+
 func test_demo_asset_is_not_the_plugin() -> void:
 	_setup()
 	http.respond_json(RELEASES_URL, [_release("v1.1.0", { "assets": [
