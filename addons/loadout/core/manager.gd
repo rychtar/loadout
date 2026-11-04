@@ -54,6 +54,8 @@ class PluginState:
 	## Version install() would put in place, "" when nothing can be installed.
 	var target_version: String = ""
 	var source_label: String = ""
+	## Web page of the plugin at its source, "" for a local folder.
+	var source_url: String = ""
 	## Why the plugin is in this state, for the dock.
 	var message: String = ""
 	## Source could not be checked, cached data used (shown in the dock, never blocks).
@@ -661,6 +663,7 @@ func _compute_state(entry: LoadoutRegistry.Entry, check_updates: bool = false) -
 	else:
 		_sources[entry.id] = source
 		state.source_label = source.describe()
+		state.source_url = source.page_url()
 		var loaded: Dictionary = await checker.load_releases(source, check_updates)
 		state.warning = loaded["warning"]
 		if not loaded["ok"]:

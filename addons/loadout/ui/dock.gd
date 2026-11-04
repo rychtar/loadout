@@ -629,6 +629,7 @@ func _update_detail() -> void:
 	if state.lock_entry != null:
 		var lock := state.lock_entry
 		_add_row("Lock", "%s%s · %s · %s" % [lock.version, " (pin)" if lock.pinned else "", lock.folder_hash.substr(7, 8) if lock.folder_hash != "" else "no hash", lock.installed_at])
+	_add_links(state)
 	# Removals sit in one menu at the end, away from the actions a click can undo.
 	var removals: Array[Dictionary] = []
 	for action in _actions_for(state):
@@ -763,6 +764,9 @@ func _add_actions(state: LoadoutManager.PluginState) -> void:
 		var backups := manager.available_backups(id)
 		if not backups.is_empty():
 			_action("Restore backup…", func() -> void: _backup_dialog.open_for(state, backups))
+	var folder_path := manager.installer.addons_dir.path_join(state.entry.folder if state.entry != null else state.id)
+	if DirAccess.dir_exists_absolute(folder_path):
+		_action("Show in FileSystem", func() -> void: EditorInterface.get_file_system_dock().navigate_to_path(folder_path + "/"))
 	if state.entry != null:
 		_action("Edit…", func() -> void: _registry_dialog.open_edit(state.entry, state.display_name))
 		_action("Remove from registry…", func() -> void:
@@ -1083,6 +1087,29 @@ func _removal_menu(actions: Array[Dictionary]) -> MenuButton:
 		popup.add_item(str(actions[index]["text"]).trim_prefix("Remove "), index)
 	popup.id_pressed.connect(func(index: int) -> void: _run(actions[index]["callable"], _action_label(actions[index])))
 	return menu
+
+
+## "Links: Plugin page · Release notes" (the release page of the version it would install, when the
+## source has one apart from the plugin page).
+func _add_links(state: LoadoutManager.PluginState) -> void:
+	var links := HFlowContainer.new()
+	links.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for link: Array in [["Plugin page", state.source_url], ["Release notes", state.release_url if state.release_url != state.source_url else ""]]:
+		if str(link[1]) == "":
+			continue
+		var button := LinkButton.new()
+		button.text = link[0]
+		button.uri = link[1]
+		button.tooltip_text = link[1]
+		links.add_child(button)
+	if links.get_child_count() == 0:
+		links.free()
+		return
+	var key := Label.new()
+	key.text = "Links"
+	key.modulate = Color(1, 1, 1, 0.7)
+	_detail_grid.add_child(key)
+	_detail_grid.add_child(links)
 
 
 func _add_row(caption: String, value: String, tooltip: String = "") -> void:

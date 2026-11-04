@@ -61,6 +61,7 @@ func test_non_semver_version_string_falls_back_to_edit_counter() -> void:
 func test_describe_and_name_after_listing() -> void:
 	_setup()
 	check_eq(source.describe(), "Asset Library · #1586", "before listing")
+	check_eq(source.page_url(), "https://godotengine.org/asset-library/asset/1586", "asset page")
 	http.respond_json(ASSET_URL, _asset())
 	source.releases.assign((await source.list_releases())["releases"])
 	check_eq(source.describe(), "Asset Library · Fake A", "with title")

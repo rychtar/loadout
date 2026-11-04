@@ -46,6 +46,10 @@ func describe() -> String:
 	return "GitHub · %s" % repo
 
 
+func page_url() -> String:
+	return "https://github.com/%s" % repo
+
+
 func is_remote() -> bool:
 	return true
 

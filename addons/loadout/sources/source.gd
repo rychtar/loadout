@@ -25,6 +25,12 @@ func describe() -> String:
 	return ""
 
 
+## Web page of the plugin at its source (repository, store page), "" when there is none. Known
+## without a request.
+func page_url() -> String:
+	return ""
+
+
 ## Remote sources are cached and throttled by the update checker, local ones are read every time.
 func is_remote() -> bool:
 	return false

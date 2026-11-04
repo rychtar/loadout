@@ -181,6 +181,12 @@ func _dock_install() -> bool:
 	_expect(FileAccess.file_exists(LoadoutLockfile.DEFAULT_PATH), "project lock written")
 	_select_first_plugin()
 	await _screenshot("dock_installed")
+	var show := _find_button(_dock, "Show in FileSystem")
+	_expect(show != null, "Show in FileSystem offered for an installed plugin")
+	if show != null:
+		show.pressed.emit()
+		await _wait_until(func() -> bool: return EditorInterface.get_current_directory() == "res://addons/fake_a/", 3000)
+		_expect(EditorInterface.get_current_directory() == "res://addons/fake_a/", "the FileSystem dock shows addons/fake_a (%s)" % EditorInterface.get_current_directory())
 	return true
 
 
