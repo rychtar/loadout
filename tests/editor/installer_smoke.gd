@@ -15,11 +15,15 @@ extends RefCounted
 ##   godot --headless -e --path <project> -- --loadout-registry=<file> --loadout-smoke=remote
 ##   forced update check, install of every registry plugin, running check, uninstall
 ## GDExtension (needs network; use a temporary project, the extension stays loaded in that editor; registry
-## with a GitHub or store entry for an add-on that has a .gdextension and no plugin.cfg, e.g. Orchestrator):
-##   godot --headless -e --path <project> -- --loadout-registry=<file> --loadout-smoke=native
-##   install, the one scan the dock would do afterwards, then checks that Godot loaded the extension without
-##   a restart. Godot reloads all scripts during that scan, which ends the coroutine, so the last checks
-##   run from timers and the process quits itself.
+## with a GitHub or store entry for an add-on that has a .gdextension, e.g. Orchestrator without a plugin.cfg
+## or Terrain3D with one):
+##   godot --headless -e --path <project> -- --loadout-registry=<file> --loadout-smoke=native [--loadout-keep]
+##   install, the scan the dock does afterwards, then checks that Godot loaded the extension without a
+##   restart and that the dock enabled the EditorPlugin of an add-on with a plugin.cfg. Godot reloads all
+##   scripts during that scan, which ends the coroutine, so the last checks run from timers and the
+##   process quits itself. Without --loadout-keep the add-ons are deleted again; with it, a second run
+##   checks that they still run in a new editor session:
+##   godot --headless -e --path <project> -- --loadout-registry=<file> --loadout-smoke=nativeverify
 ## Self-update (GUI or headless; registry has a "loadout" entry pointing to a newer Loadout copy):
 ##   godot -e --path <project> -- --loadout-registry=<file> --loadout-smoke=self
 ##   first run updates Loadout from the dock and the editor restarts itself. Godot relaunches it
@@ -39,7 +43,8 @@ const FIXTURES := "res://tests/fixtures/addons/fake_a"
 const SMOKE_DIR := "user://loadout_smoke"
 const AUTOLOAD_NAME := "FakeA"
 ## Native mode: how long after the scan the checks run, and the limit for the whole test.
-const NATIVE_SETTLE_S := 10.0
+const NATIVE_SETTLE_S := 15.0
+const KEEP_ARG := "--loadout-keep"
 const NATIVE_GUARD_S := 180.0
 
 var _tree: SceneTree
@@ -67,6 +72,14 @@ func _init(tree: SceneTree, plugin: EditorPlugin = null) -> void:
 
 
 func run(mode: String) -> bool:
+	if mode == "nativeverify":
+		# An extension that does not load at startup is tried again by the first scan, which reloads every
+		# script and cancels this coroutine: the check runs from a timer and quits the editor itself.
+		Engine.set_meta("loadout_smoke", self)
+		_tree.create_timer(NATIVE_SETTLE_S).timeout.connect(_native_verify_check, CONNECT_ONE_SHOT)
+		await _tree.create_timer(NATIVE_GUARD_S).timeout
+		_expect(false, "the check did not run in %d s" % NATIVE_GUARD_S)
+		return false
 	var filesystem := EditorInterface.get_resource_filesystem()
 	while filesystem.is_scanning():
 		await _tree.process_frame
@@ -544,8 +557,7 @@ func _run_native() -> void:
 	# Godot reloads all scripts after the scan, which frees this object: keep it for the timer callbacks.
 	Engine.set_meta("loadout_smoke", self)
 	var manager: LoadoutManager = _plugin.get_manager()
-	for connection in manager.scan_requested.get_connections():
-		manager.scan_requested.disconnect(connection["callable"])
+	# The dock scans and enables the plugins (its own timers); this only counts and checks afterwards.
 	manager.scan_requested.connect(_native_scan_requested)
 	await manager.refresh(true)
 	_expect(manager.errors.is_empty(), "registry and lock load: %s" % ", ".join(manager.errors))
@@ -563,33 +575,57 @@ func _run_native() -> void:
 
 func _native_scan_requested() -> void:
 	_native_scans += 1
-	_tree.create_timer(1.0).timeout.connect(_native_scan, CONNECT_ONE_SHOT)
-
-
-func _native_scan() -> void:
-	Log.write("native: scanning")
-	EditorInterface.get_resource_filesystem().scan()
 	_tree.create_timer(NATIVE_SETTLE_S).timeout.connect(_native_check, CONNECT_ONE_SHOT)
 
 
 func _native_check() -> void:
 	var manager: LoadoutManager = _plugin.get_manager()
 	for state in manager.states:
-		var dir := _installer.target_dir(state.entry)
-		var loaded := false
-		for relative in Fs.list_files(dir):
-			if relative.ends_with(".gdextension"):
-				var path := dir.path_join(relative)
-				loaded = GDExtensionManager.is_extension_loaded(path)
-				Log.write("native: %s loaded=%s" % [path, loaded])
-		_expect(loaded, "%s: Godot loaded the extension after the scan" % state.id)
-		Fs.remove_dir(dir)
-	DirAccess.remove_absolute(ProjectSettings.globalize_path(LoadoutLockfile.DEFAULT_PATH))
+		_expect_native_running(state, "after the scan")
+	if not OS.get_cmdline_user_args().has(KEEP_ARG):
+		for state in manager.states:
+			Fs.remove_dir(_installer.target_dir(state.entry))
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(LoadoutLockfile.DEFAULT_PATH))
 	for failure in _failures:
 		Log.write("SMOKE FAIL %s" % failure, Log.Level.ERROR)
 	Log.write("SMOKE native: %s" % ("passed" if _failures.is_empty() else "%d failed" % _failures.size()))
 	Engine.remove_meta("loadout_smoke")
 	_tree.quit(0 if _failures.is_empty() else 1)
+
+
+## Second session after native --loadout-keep: the add-ons load at startup and their EditorPlugins run.
+func _native_verify_check() -> void:
+	var manager: LoadoutManager = _plugin.get_manager()
+	await manager.refresh()
+	_expect(not manager.states.is_empty(), "the registry has the add-ons")
+	for state in manager.states:
+		_expect(state.status == LoadoutManager.Status.OK, "%s: status %s" % [state.id, LoadoutManager.Status.find_key(state.status)])
+		_expect_native_running(state, "in a new session")
+	for failure in _failures:
+		Log.write("SMOKE FAIL %s" % failure, Log.Level.ERROR)
+	Log.write("SMOKE nativeverify: %s" % ("passed" if _failures.is_empty() else "%d failed" % _failures.size()))
+	Engine.remove_meta("loadout_smoke")
+	_tree.quit(0 if _failures.is_empty() else 1)
+
+
+## The extension is loaded and, when the add-on has a plugin.cfg, its EditorPlugin runs and is saved
+## as enabled in project.godot.
+func _expect_native_running(state: LoadoutManager.PluginState, label: String) -> void:
+	var dir := _installer.target_dir(state.entry)
+	var loaded := false
+	for relative in Fs.list_files(dir):
+		if relative.ends_with(".gdextension"):
+			var path := dir.path_join(relative)
+			loaded = GDExtensionManager.is_extension_loaded(path)
+			Log.write("native: %s loaded=%s" % [path, loaded])
+	_expect(loaded, "%s %s: Godot loaded the extension" % [state.id, label])
+	if not Package.has_plugin_cfg(dir):
+		return
+	var running := _installer.editor.is_plugin_running(state.entry.folder)
+	var saved := FileAccess.get_file_as_string("res://project.godot").contains("res://addons/%s/plugin.cfg" % state.entry.folder)
+	Log.write("native: %s EditorPlugin running=%s, enabled in project.godot=%s" % [state.id, running, saved])
+	_expect(running, "%s %s: its EditorPlugin runs" % [state.id, label])
+	_expect(saved, "%s %s: enabled in project.godot" % [state.id, label])
 
 
 func _run_self() -> void:
