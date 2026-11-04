@@ -153,7 +153,7 @@ func test_save_and_load_roundtrip() -> void:
 	check(result["ok"], "loads back")
 	var loaded: Registry = result["registry"]
 	check_eq(loaded.to_dict(), registry.to_dict(), "same content")
-	check(not FileAccess.file_exists(path + ".tmp"), "no temp file left")
+	check_eq(DirAccess.get_files_at(dir), PackedStringArray(["loadout_registry.json"]), "no temp file left")
 
 
 func test_corrupt_file_is_backed_up_not_overwritten() -> void:
