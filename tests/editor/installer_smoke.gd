@@ -289,7 +289,6 @@ func _dock_restore() -> void:
 		_expect(list.item_count >= 1 and list.get_item_text(0).begins_with(expected), "newest backup is %s (%s)" % [expected, list.get_item_text(0) if list.item_count > 0 else "none"])
 		await _screenshot("dock_restore_%s" % expected, dialog)
 		(dialog.get("_pin_check") as CheckBox).button_pressed = expected == "1.0.0"
-		var list: ItemList = dialog.get("_list")
 		if expected == "1.0.0":
 			dialog.get_ok_button().pressed.emit()
 		else:
