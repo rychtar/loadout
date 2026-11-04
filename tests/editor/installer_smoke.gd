@@ -284,7 +284,12 @@ func _dock_restore() -> void:
 		_expect(list.item_count >= 1 and list.get_item_text(0).begins_with(expected), "newest backup is %s (%s)" % [expected, list.get_item_text(0) if list.item_count > 0 else "none"])
 		await _screenshot("dock_restore_%s" % expected, dialog)
 		(dialog.get("_pin_check") as CheckBox).button_pressed = expected == "1.0.0"
-		dialog.get_ok_button().pressed.emit()
+		var list: ItemList = dialog.get("_list")
+		if expected == "1.0.0":
+			dialog.get_ok_button().pressed.emit()
+		else:
+			# A double-click on the row restores it too.
+			list.item_activated.emit(list.get_selected_items()[0])
 		await _wait_until(func() -> bool: return not _dock.get("_busy") and _installed_version() == expected, 30000)
 		_expect_running(expected, "restored %s from the dock" % expected)
 		if await _wait_until(func() -> bool: return _confirm.visible, 3000):

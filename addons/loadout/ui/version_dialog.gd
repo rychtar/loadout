@@ -27,6 +27,7 @@ func _init() -> void:
 	_list = ItemList.new()
 	_list.custom_minimum_size = Vector2(0, roundi(150 * scale))
 	_list.item_selected.connect(_on_selected)
+	_list.item_activated.connect(_confirm_row)
 	box.add_child(_list)
 	# Long notes scroll instead of growing the dialog past the screen.
 	var scroll := ScrollContainer.new()
@@ -100,3 +101,9 @@ func _on_confirmed() -> void:
 	if selected.is_empty():
 		return
 	version_chosen.emit(_id, _versions[selected[0]]["version"], _pin_check.button_pressed)
+
+
+## A double-click (or Enter) on a row confirms it, like OK.
+func _confirm_row(_index: int) -> void:
+	if not get_ok_button().disabled:
+		get_ok_button().pressed.emit()

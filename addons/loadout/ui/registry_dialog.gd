@@ -97,6 +97,7 @@ func _init() -> void:
 	_results = ItemList.new()
 	_results.custom_minimum_size = Vector2(0, roundi(160 * scale))
 	_results.item_selected.connect(_on_result_selected)
+	_results.item_activated.connect(_confirm_row)
 	_store_box.add_child(_results)
 	_search_status = _wrapped(_caption("Free add-ons compatible with your Godot version."), width)
 	_store_box.add_child(_search_status)
@@ -440,3 +441,9 @@ func _labeled_edit(grid: GridContainer, caption: String, value: String) -> LineE
 	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	grid.add_child(edit)
 	return edit
+
+
+## A double-click (or Enter) on a row confirms it, like OK.
+func _confirm_row(_index: int) -> void:
+	if not get_ok_button().disabled:
+		get_ok_button().pressed.emit()

@@ -25,6 +25,7 @@ func _init() -> void:
 	_list = ItemList.new()
 	_list.custom_minimum_size = Vector2(0, roundi(150 * scale))
 	_list.item_selected.connect(func(_index: int) -> void: _update_ok())
+	_list.item_activated.connect(_confirm_row)
 	box.add_child(_list)
 	_pin_check = CheckBox.new()
 	_pin_check.text = "Pin to the restored version (no update offers in this project)"
@@ -70,3 +71,9 @@ func _on_confirmed() -> void:
 	var selected := _list.get_selected_items()
 	if not selected.is_empty():
 		backup_chosen.emit(_id, _backups[selected[0]]["path"], _pin_check.button_pressed)
+
+
+## A double-click (or Enter) on a row confirms it, like OK.
+func _confirm_row(_index: int) -> void:
+	if not get_ok_button().disabled:
+		get_ok_button().pressed.emit()
