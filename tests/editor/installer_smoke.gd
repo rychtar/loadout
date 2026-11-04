@@ -222,6 +222,8 @@ func _dock_update() -> void:
 	_expect(await _wait_until(func() -> bool: return _confirm.visible, 5000), "a double-click asks to update")
 	await _screenshot("dock_update_confirm", _confirm)
 	_confirm.get_ok_button().pressed.emit()
+	var busy: Label = _dock.get("_busy_label")
+	_expect(busy.visible and busy.text == "Update · Fake A…", "the busy line names the action (%s)" % busy.text)
 	await _wait_until(func() -> bool: return _status_of("fake_a") == LoadoutManager.Status.OK, 30000)
 	_expect_running("1.1.0", "updated from the dock")
 	# FakeALegacy was removed in 1.1.0: the dock offers a restart, decline it.

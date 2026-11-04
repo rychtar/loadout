@@ -100,6 +100,8 @@ var _backup_dialog: BackupDialog
 var _export_dialog: EditorFileDialog
 var _import_dialog: EditorFileDialog
 var _on_confirm: Callable
+## What the confirmed action does, for the busy line ("Update · Fake A").
+var _confirm_label := ""
 ## Actions _add_actions() collects for one plugin: [{ "text", "callable", "primary", "available", "danger" }].
 var _collected_actions: Array[Dictionary] = []
 ## Right-click menu of the plugin list and the actions its items stand for (by index).
@@ -241,7 +243,7 @@ func offer_new_addons(found: Array[Dictionary]) -> void:
 	var others := "" if found.size() == 1 else "\n\nThe other new plugins are listed in the Loadout dock."
 	_ask("New plugin %s %s found in addons/%s.\n\nAdd it to your global plugins? Loadout then keeps it in sync across your projects and watches for updates.%s"
 			% [info["name"], info["version"], info["folder"], others],
-			"Add to registry…", func() -> void: _registry_dialog.open_existing(info), "Not now")
+			"Add to registry…", func() -> void: _registry_dialog.open_existing(info), "Not now", "Adding %s" % info["name"])
 
 
 func _build() -> void:
@@ -251,7 +253,7 @@ func _build() -> void:
 	_info_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_info_label.clip_text = true
 	header.add_child(_info_label)
-	_check_button = _icon_button("Reload", "", func() -> void: _run(_check_updates))
+	_check_button = _icon_button("Reload", "", func() -> void: _run(_check_updates, "Checking for updates"))
 	header.add_child(_check_button)
 	header.add_child(_icon_button("Add", "Add a plugin to the global registry", func() -> void: _registry_dialog.open()))
 	var menu := MenuButton.new()
@@ -266,6 +268,13 @@ func _build() -> void:
 	popup.add_item("GitHub token…", MENU_TOKEN)
 	popup.id_pressed.connect(_on_menu)
 	header.add_child(menu)
+
+	# Right under the header, where it is seen: what runs now (the dock is disabled meanwhile).
+	_busy_label = Label.new()
+	_busy_label.visible = false
+	_busy_label.clip_text = true
+	_busy_label.add_theme_color_override("font_color", _theme_color("accent_color", Color(0.44, 0.73, 0.98)))
+	add_child(_busy_label)
 
 	_problems_label = Label.new()
 	_problems_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -331,13 +340,8 @@ func _build() -> void:
 	_detail_actions = HFlowContainer.new()
 	add_child(_detail_actions)
 	_context_menu = PopupMenu.new()
-	_context_menu.id_pressed.connect(func(index: int) -> void: _run(_menu_actions[index]["callable"]))
+	_context_menu.id_pressed.connect(func(index: int) -> void: _run(_menu_actions[index]["callable"], _action_label(_menu_actions[index])))
 	add_child(_context_menu)
-	_busy_label = Label.new()
-	_busy_label.text = "Working…"
-	_busy_label.visible = false
-	add_child(_busy_label)
-
 	var base := EditorInterface.get_base_control()
 	var dialog_size := Vector2i(roundi(480 * scale), 0)
 	_confirm = ConfirmationDialog.new()
@@ -346,7 +350,7 @@ func _build() -> void:
 	_confirm.cancel_button_text = "Cancel"
 	_confirm.confirmed.connect(func() -> void:
 		if _on_confirm.is_valid():
-			_run(_on_confirm))
+			_run(_on_confirm, _confirm_label))
 	base.add_child(_confirm)
 	_alert = AcceptDialog.new()
 	_alert.dialog_autowrap = true
@@ -359,28 +363,28 @@ func _build() -> void:
 		_show_alert("Registry saved to %s." % path if err == OK else "Export failed: %s" % error_string(err)))
 	base.add_child(_export_dialog)
 	_import_dialog = _file_dialog(EditorFileDialog.FILE_MODE_OPEN_FILE, "Import registry")
-	_import_dialog.file_selected.connect(func(path: String) -> void: _run(_import_registry.bind(path)))
+	_import_dialog.file_selected.connect(func(path: String) -> void: _run(_import_registry.bind(path), "Importing the registry"))
 	base.add_child(_import_dialog)
 	_install_dialog = InstallDialog.new()
 	_install_dialog.details_provider = func(id: String) -> Dictionary: return await manager.plugin_details(id)
 	_install_dialog.starters_hidden.connect(_on_starters_hidden)
 	_install_dialog.install_chosen.connect(func(ids: PackedStringArray, starters: PackedStringArray, ignore: PackedStringArray) -> void:
-		_run(_install_chosen.bind(ids, starters, ignore)))
+		_run(_install_chosen.bind(ids, starters, ignore), "Installing plugins"))
 	base.add_child(_install_dialog)
 	_version_dialog = VersionDialog.new()
 	_version_dialog.version_chosen.connect(func(id: String, version: String, pin: bool) -> void:
-		_run(func() -> Dictionary: return await manager.install(id, false, version, pin)))
+		_run(func() -> Dictionary: return await manager.install(id, false, version, pin), "Installing %s %s" % [_display_name(id), version]))
 	base.add_child(_version_dialog)
 	_backup_dialog = BackupDialog.new()
 	_backup_dialog.backup_chosen.connect(func(id: String, path: String, pin: bool) -> void:
-		_run(func() -> Dictionary: return await manager.restore_backup(id, path, pin)))
+		_run(func() -> Dictionary: return await manager.restore_backup(id, path, pin), "Restoring a backup of %s" % _display_name(id)))
 	base.add_child(_backup_dialog)
 	_registry_dialog = RegistryDialog.new()
 	_registry_dialog.store_search = store_search
 	_registry_dialog.entry_submitted.connect(func(data: Dictionary, take_over: bool) -> void:
-		_run(func() -> String: return await manager.add_registry_entry(data, take_over)))
+		_run(func() -> String: return await manager.add_registry_entry(data, take_over), "Adding %s to the registry" % str(data.get("id", ""))))
 	_registry_dialog.entry_edited.connect(func(id: String, data: Dictionary) -> void:
-		_run(func() -> String: return await manager.update_registry_entry(id, data)))
+		_run(func() -> String: return await manager.update_registry_entry(id, data), "Saving %s" % _display_name(id)))
 	base.add_child(_registry_dialog)
 
 
@@ -615,7 +619,19 @@ func _actions_for(state: LoadoutManager.PluginState) -> Array[Dictionary]:
 	_add_actions(state)
 	var actions := _collected_actions
 	_collected_actions = []
+	for action in actions:
+		action["subject"] = state.display_name
 	return actions
+
+
+## "Install 1.0.0 · Fake A" for the busy line.
+func _action_label(action: Dictionary) -> String:
+	return "%s · %s" % [str(action["text"]).trim_suffix("…"), action.get("subject", "")]
+
+
+func _display_name(id: String) -> String:
+	var state := manager.get_state(id)
+	return state.display_name if state != null else id
 
 
 ## The available primary action (install, update), {} when the plugin has none.
@@ -637,7 +653,7 @@ func _on_item_activated() -> void:
 		return
 	var action := _primary_action(state)
 	if not action.is_empty():
-		_run(action["callable"])
+		_run(action["callable"], _action_label(action))
 
 
 func _on_item_mouse_selected(mouse_position: Vector2, button_index: int) -> void:
@@ -775,7 +791,7 @@ func _confirm_update_all() -> void:
 		var state := manager.get_state(id)
 		lines.append("•  %s %s → %s" % [state.display_name, state.installed_version, state.target_version])
 	_ask("Update %d plugins?\n\n%s\n\nEach one is disabled, backed up to user://loadout_backup/, replaced and enabled again. On failure its old version comes back." % [lines.size(), "\n".join(lines)],
-			"Update all", _install_updates, "Not now")
+			"Update all", _install_updates, "Not now", "Updating %d plugins" % lines.size())
 
 
 func _check_updates() -> Dictionary:
@@ -837,7 +853,7 @@ func _offer_package_folders(folders: Dictionary) -> void:
 				state.entry.folder if state != null and state.entry != null else "?", folders[id]])
 	_ask("These packages keep the plugin in another folder than the registry:\n\n%s\n\nPlugins often use fixed res://addons/<folder>/ paths and break under another name. Use the package folders and install?"
 			% "\n".join(lines), "Use package folders", func() -> Dictionary:
-				return _summary_result(await manager.use_package_folders(folders), "Some plugins could not be installed:"), "Not now")
+				return _summary_result(await manager.use_package_folders(folders), "Some plugins could not be installed:"), "Not now", "Installing plugins")
 
 
 func _summary_result(summary: Dictionary, heading: String) -> Dictionary:
@@ -850,10 +866,13 @@ func _summary_result(summary: Dictionary, heading: String) -> Dictionary:
 	return { "ok": false, "error": "%s\n\n%s" % [heading, "\n".join(lines)] }
 
 
-## Runs an action (may await), keeps the dock disabled meanwhile and reports the result.
-func _run(action: Callable) -> void:
+## Runs an action (may await), keeps the dock disabled meanwhile and reports the result. label says
+## what runs, at the top of the dock.
+func _run(action: Callable, label: String = "") -> void:
 	if _busy:
 		return
+	_busy_label.text = "%s…" % (label.trim_suffix("…") if label != "" else "Working")
+	_busy_label.tooltip_text = _busy_label.text
 	_set_busy(true)
 	var result: Variant = await action.call()
 	_set_busy(false)
@@ -928,7 +947,7 @@ func _enable_scanned() -> void:
 
 func _offer_restart() -> void:
 	_ask("The editor has to restart for the change to take effect (a plugin with native code is loaded at startup, or the new version removed some classes). Restart now?",
-			"Restart editor", func() -> void: EditorInterface.restart_editor(true))
+			"Restart editor", func() -> void: EditorInterface.restart_editor(true), "Cancel", "Restarting the editor")
 
 
 ## Removes the children at once (queue_free alone leaves them in the layout until the frame ends).
@@ -953,7 +972,10 @@ func _set_busy(busy: bool) -> void:
 				child.disabled = busy
 
 
-func _ask(text: String, ok_text: String, on_confirm: Callable, cancel_text: String = "Cancel") -> void:
+## label: what the confirmed action does, for the busy line; "" uses ok_text and the selected plugin.
+func _ask(text: String, ok_text: String, on_confirm: Callable, cancel_text: String = "Cancel", label: String = "") -> void:
+	var state := manager.get_state(_selected_id)
+	_confirm_label = label if label != "" else ok_text if state == null else "%s · %s" % [ok_text, state.display_name]
 	_confirm.dialog_text = text
 	_confirm.ok_button_text = ok_text
 	_confirm.cancel_button_text = cancel_text
@@ -989,7 +1011,8 @@ func _action_button(action: Dictionary) -> Button:
 	if action["primary"]:
 		button.add_theme_color_override("font_color", _theme_color("accent_color", Color(0.44, 0.73, 0.98)))
 	var callable: Callable = action["callable"]
-	button.pressed.connect(func() -> void: _run(callable))
+	var label := _action_label(action)
+	button.pressed.connect(func() -> void: _run(callable, label))
 	return button
 
 
@@ -1006,7 +1029,7 @@ func _removal_menu(actions: Array[Dictionary]) -> MenuButton:
 	var popup := menu.get_popup()
 	for index in actions.size():
 		popup.add_item(str(actions[index]["text"]).trim_prefix("Remove "), index)
-	popup.id_pressed.connect(func(index: int) -> void: _run(actions[index]["callable"]))
+	popup.id_pressed.connect(func(index: int) -> void: _run(actions[index]["callable"], _action_label(actions[index])))
 	return menu
 
 
