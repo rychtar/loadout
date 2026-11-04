@@ -103,6 +103,19 @@ func test_install_missing_writes_lock() -> void:
 	check(manager.missing_ids().is_empty(), "nothing missing")
 
 
+func test_a_batch_refreshes_once() -> void:
+	_setup("batch_refresh", [_local("fake_a", "1.0.0"), _local("fake_b", "1.0.0", { "folder": "fake_b" })])
+	_fake("fake_b", ["1.0.0"])
+	await manager.refresh()
+	var refreshes: Array[int] = [0]
+	manager.states_changed.connect(func() -> void: refreshes[0] += 1)
+	var summary: Dictionary = await manager.install_missing()
+	check_eq(summary["installed"], PackedStringArray(["fake_a", "fake_b"]), "both installed: %s" % summary["failed"])
+	check_eq(refreshes[0], 1, "one refresh for the whole batch")
+	check_eq([_status("fake_a"), _status("fake_b")], [Manager.Status.OK, Manager.Status.OK], "states are current")
+	check_eq(_saved_lock().plugins.size(), 2, "both locked")
+
+
 func test_auto_install_false_is_not_offered() -> void:
 	_setup("manual", [_local("fake_a", "1.0.0", { "auto_install": false })])
 	await manager.refresh()

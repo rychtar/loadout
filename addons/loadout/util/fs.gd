@@ -10,6 +10,12 @@ const HASH_IGNORED_EXTENSIONS: PackedStringArray = ["uid", "import"]
 const HASH_IGNORED_NAMES: PackedStringArray = [".ds_store", "thumbs.db", "desktop.ini"]
 ## Files with a NUL byte in this prefix are binary (same heuristic as git).
 const BINARY_SNIFF_BYTES := 8000
+## A folder hash is reused only when every file is older than this: file times have one-second steps,
+## so an edit in the same second could keep the time (the "racy" case git knows too).
+const HASH_CACHE_MIN_AGE_S := 2
+
+## hash_dir() results by folder: [signature of the file names, sizes and times, hash].
+static var _hash_cache: Dictionary[String, Array] = {}
 
 
 ## Recursively copies the contents of src into dst (dst is created if missing).
@@ -81,9 +87,47 @@ static func list_files(root: String) -> PackedStringArray:
 ## "sha256:<hex>" of the folder content, "" if the folder does not exist.
 ## Covers relative paths and file contents. Ignores editor-generated files (.uid, .import) and
 ## treats CRLF as LF in text files so a git checkout on Windows does not look like a change.
+## The result is reused while no file was added, removed, resized or touched, so a refresh of many
+## plugins does not read all their files again.
 static func hash_dir(path: String) -> String:
 	if not DirAccess.dir_exists_absolute(path):
 		return ""
+	var key := ProjectSettings.globalize_path(path).simplify_path()
+	var signature := _signature(path)
+	if signature != "" and _hash_cache.has(key) and _hash_cache[key][0] == signature:
+		return _hash_cache[key][1]
+	var folder_hash := _hash_files(path)
+	if signature != "":
+		_hash_cache[key] = [signature, folder_hash]
+	else:
+		_hash_cache.erase(key)
+	return folder_hash
+
+
+## Whether hash_dir(path) would answer from its cache (for tests).
+static func is_hash_cached(path: String) -> bool:
+	var key := ProjectSettings.globalize_path(path).simplify_path()
+	return _hash_cache.has(key) and _hash_cache[key][0] == _signature(path)
+
+
+## Names, sizes and modification times of the files hash_dir() reads; "" when a file is too new to
+## trust its time.
+static func _signature(path: String) -> String:
+	var newest_trusted := int(Time.get_unix_time_from_system()) - HASH_CACHE_MIN_AGE_S
+	var lines := PackedStringArray()
+	for relative in list_files(path):
+		if _hash_ignored(relative):
+			continue
+		var file_path := path.path_join(relative)
+		var modified := FileAccess.get_modified_time(file_path)
+		var file := FileAccess.open(file_path, FileAccess.READ)
+		if file == null or modified > newest_trusted:
+			return ""
+		lines.append("%s\n%d\n%d" % [relative, file.get_length(), modified])
+	return "\n".join(lines).sha256_text()
+
+
+static func _hash_files(path: String) -> String:
 	var context := HashingContext.new()
 	context.start(HashingContext.HASH_SHA256)
 	var hashes := file_hashes(path)
@@ -99,8 +143,7 @@ static func hash_dir(path: String) -> String:
 static func file_hashes(path: String) -> Dictionary:
 	var hashes := {}
 	for relative in list_files(path):
-		var file_name := relative.get_file()
-		if HASH_IGNORED_NAMES.has(file_name.to_lower()) or HASH_IGNORED_EXTENSIONS.has(file_name.get_extension()):
+		if _hash_ignored(relative):
 			continue
 		var content := _normalized_bytes(path.path_join(relative))
 		var content_hash := HashingContext.new()
@@ -109,6 +152,11 @@ static func file_hashes(path: String) -> Dictionary:
 			content_hash.update(content)
 		hashes[relative] = content_hash.finish().hex_encode()
 	return hashes
+
+
+static func _hash_ignored(relative: String) -> bool:
+	var file_name := relative.get_file()
+	return HASH_IGNORED_NAMES.has(file_name.to_lower()) or HASH_IGNORED_EXTENSIONS.has(file_name.get_extension())
 
 
 ## How folder `current` differs from `baseline`: { "modified": [...], "added": [...], "removed": [...] }
@@ -155,15 +203,15 @@ static func _normalized_bytes(path: String) -> PackedByteArray:
 	var bytes := FileAccess.get_file_as_bytes(path)
 	if not bytes.has(13) or bytes.slice(0, BINARY_SNIFF_BYTES).has(0):
 		return bytes
-	# Text file with CR: drop every CR that precedes LF (byte level, works for any encoding).
+	# Text file with CR: drop every CR that precedes LF (byte level, works for any encoding). The loop
+	# jumps from CR to CR and copies the runs in between, so it runs once per line, not per byte.
 	var out := PackedByteArray()
-	out.resize(bytes.size())
-	var size := 0
-	var last := bytes.size() - 1
-	for i in bytes.size():
-		if bytes[i] == 13 and i < last and bytes[i + 1] == 10:
-			continue
-		out[size] = bytes[i]
-		size += 1
-	out.resize(size)
+	var start := 0
+	var cr := bytes.find(13)
+	while cr != -1:
+		if cr + 1 < bytes.size() and bytes[cr + 1] == 10:
+			out.append_array(bytes.slice(start, cr))
+			start = cr + 1
+		cr = bytes.find(13, cr + 1)
+	out.append_array(bytes.slice(start))
 	return out

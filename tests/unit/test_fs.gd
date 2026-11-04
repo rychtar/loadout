@@ -61,6 +61,36 @@ func test_hash_ignores_editor_files_and_line_endings() -> void:
 	check_eq(Fs.hash_dir(dir), first, "CRLF equals LF")
 
 
+func test_hash_cache_waits_for_old_files_and_sees_changes() -> void:
+	var dir := temp_dir("fs_hash_cache")
+	write_text(dir.path_join("a.gd"), "extends Node\r\nvar a := 1\r\n")
+	var fresh := Fs.hash_dir(dir)
+	check(not Fs.is_hash_cached(dir), "a file from this second is not trusted for the cache")
+	if OS.get_name() == "Windows":
+		return # touch -t sets the file time below
+	var global := ProjectSettings.globalize_path(dir.path_join("a.gd"))
+	OS.execute("touch", ["-t", "202601010000", global])
+	check_eq(Fs.hash_dir(dir), fresh, "same hash")
+	check(Fs.is_hash_cached(dir), "older files are cached")
+	write_text(dir.path_join("a.gd"), "extends Node\r\nvar b := 2\r\n")
+	check(not Fs.is_hash_cached(dir), "an edit invalidates the cache")
+	check(Fs.hash_dir(dir) != fresh, "and is seen")
+	write_text(dir.path_join("b.gd"), "x")
+	OS.execute("touch", ["-t", "202601010000", global, ProjectSettings.globalize_path(dir.path_join("b.gd"))])
+	var with_new_file := Fs.hash_dir(dir)
+	check(Fs.is_hash_cached(dir), "cached again")
+	DirAccess.remove_absolute(dir.path_join("b.gd"))
+	check(Fs.hash_dir(dir) != with_new_file, "a removed file is seen")
+
+
+func test_crlf_normalization() -> void:
+	var dir := temp_dir("fs_crlf")
+	write_text(dir.path_join("a.txt"), "one\r\ntwo\rthree\r\n\r\nend\r")
+	write_text(dir.path_join("b.txt"), "one\ntwo\rthree\n\nend\r")
+	var hashes := Fs.file_hashes(dir)
+	check_eq(hashes["a.txt"], hashes["b.txt"], "only a CR before LF is dropped")
+
+
 func test_hash_binary_untouched() -> void:
 	var dir := temp_dir("fs_hash_binary")
 	var file := FileAccess.open(dir.path_join("data.bin"), FileAccess.WRITE)

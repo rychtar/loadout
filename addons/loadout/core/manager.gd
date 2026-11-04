@@ -241,6 +241,9 @@ func _install_all(ids: PackedStringArray) -> Dictionary:
 			if result.get("fallback_version", "") != "":
 				summary["failed"][id] += " An older version (%s) may work: select the plugin and use Install version…." % result["fallback_version"]
 	_batch_depth -= 1
+	if not ids.is_empty() and _batch_depth == 0:
+		# Each install of the batch skipped its own refresh (every refresh reads all plugin folders).
+		await refresh()
 	_flush_scan()
 	return summary
 
@@ -757,7 +760,8 @@ func _install(state: PluginState, force: bool, version: String, pin: bool) -> Di
 	elif result.get("load_failed", false):
 		# The plugin does not run here: the newest release may need another Godot than the older ones.
 		result["fallback_version"] = _older_version(state.id, target)
-	await refresh()
+	if _batch_depth == 0:
+		await refresh()
 	return result
 
 
