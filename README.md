@@ -32,7 +32,8 @@ plugins a project is missing, keeps their versions in a lock file and tells you 
 2. Enable **Loadout** in **Project → Project Settings → Plugins**.
 
 You need Godot 4.5 or newer (tested on 4.5.1 and 4.7.1). For many projects, one command does both steps. It is safe to run again, and
-a different Loadout version is replaced only with `--force` (close the project's editor first):
+a different Loadout version is replaced only with `--force` (close the project's editor first; the old
+version comes back if the copy fails):
 
 ```bash
 tools/install_loadout.sh ~/path/to/your/project
@@ -80,7 +81,8 @@ the same way and restarts the editor. Offline, it uses the data it saved last ti
 dock.
 
 An add-on with a `.gdextension` file (a GDExtension, with or without `plugin.cfg`) is different. A new
-one is copied and Godot loads it itself. The editor cannot swap a native library it has loaded, so an
+one is copied and Godot loads it itself; when it also has a `plugin.cfg`, its editor plugin is enabled
+right after. The editor cannot swap a native library it has loaded, so an
 update or a removal only backs up and replaces (or deletes) the files and offers an editor restart.
 Its version is kept in the lock, since the package has no
 `plugin.cfg` to say. On Windows a library the editor has loaded is locked: the replacement then fails,

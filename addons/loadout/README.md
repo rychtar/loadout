@@ -30,7 +30,8 @@ plugins a project is missing, keeps their versions in a lock file and tells you 
 2. Enable **Loadout** in **Project → Project Settings → Plugins**.
 
 You need Godot 4.5 or newer (tested on 4.5.1 and 4.7.1). For many projects, one command does both steps. It is safe to run again, and
-a different Loadout version is replaced only with `--force` (close the project's editor first):
+a different Loadout version is replaced only with `--force` (close the project's editor first; the old
+version comes back if the copy fails):
 
 ```bash
 tools/install_loadout.sh ~/path/to/your/project

@@ -4,12 +4,24 @@
 
 ### Added
 
-- **GDExtensions**: add-ons that ship a `.gdextension` file, with or without a `plugin.cfg` (for example Orchestrator), can be installed, updated, restored and removed. A new one is copied and Godot loads it right after (no restart). An update or a removal backs up and replaces or deletes the files and offers an editor restart, because the editor cannot swap a library it has loaded. Nothing is enabled or disabled. The version is taken from the lock when there is no `plugin.cfg`. Add-ons like this that are already in the project are listed for "Add to registry…" too.
+- **GDExtensions**: add-ons that ship a `.gdextension` file, with or without a `plugin.cfg` (for example Orchestrator), can be installed, updated, restored and removed. A new one is copied and Godot loads it right after (no restart). An update or a removal backs up and replaces or deletes the files and offers an editor restart, because the editor cannot swap a library it has loaded. Nothing is enabled or disabled. The version is taken from the lock when there is no `plugin.cfg`. When the add-on also has a `plugin.cfg`, its editor plugin is enabled once Godot has loaded the library (with the next editor start when an older copy of the library is still loaded). Add-ons like this that are already in the project are listed for "Add to registry…" too.
 - Releases numbered the way Godot does it are understood: `v2.5.stable` is 2.5.0, `v2.5.1.rc2` is a release candidate of 2.5.1, `v2.6.dev2` a snapshot of 2.6.0. They are offered as pre-releases only with the opt-in, as before.
 
 ### Changed
 
 - A release with both a `-demo-` zip and a plugin zip downloads the plugin zip.
+- A release zip that names the plugin folder as a whole word (`ui-1.0.zip` for `ui`, `debug-draw-3d.zip` for `debug_draw_3d`) wins over one that only contains it (`build-tools.zip`).
+- Refreshing the dock no longer reads every file of every plugin again: a folder's hash is reused until one of its files changes, and installing several plugins refreshes the list once at the end instead of after each plugin.
+- An install waits up to two minutes for the editor's filesystem scan, counted from the scan Loadout starts, so an update in a large project is no longer rolled back because the scan took longer than 30 seconds.
+
+### Fixed
+
+- Registry and lock entries this Loadout version cannot read (a source type or a version range from a newer Loadout, or a typo) are kept when it saves the file, instead of being dropped for every project. Their id and folder cannot be taken by a new entry meanwhile. Whole numbers in fields Loadout does not know are no longer written back as `5.0`.
+- When **Remove from project** cannot delete the folder (a file locked by another program), the files are put back from the backup and the plugin is enabled again, instead of leaving a disabled, half-deleted plugin.
+- The **Install** button of a plugin with no installable version stays disabled after another action.
+- On Windows, an editor that reads the shared registry exactly while another editor saves it reads the new content instead of an empty registry.
+- A package whose zip declares more than 512 MB of content is refused before anything is unpacked, not after Loadout already unpacked a huge file into memory.
+- `tools/install_loadout --force` moves the old Loadout aside while it copies the new one and puts it back when the copy fails, instead of leaving the project without Loadout.
 
 ## 0.3.0
 
