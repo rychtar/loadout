@@ -15,7 +15,7 @@ config_version=5
 
 [application]
 
-config/name="Nova hra"
+config/name="New Game"
 config/features=PackedStringArray("4.5", "Forward Plus")
 config/icon="res://icon.svg"
 """
