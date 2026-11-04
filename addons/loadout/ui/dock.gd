@@ -86,6 +86,8 @@ var _version_width := 0
 var _columns_fitted := true
 var _unregistered_box: VBoxContainer
 var _unregistered_rows: VBoxContainer
+var _detail_scroll: ScrollContainer
+var _detail_box: VBoxContainer
 var _detail_title: Label
 var _detail_message: Label
 var _detail_grid: GridContainer
@@ -117,6 +119,7 @@ func _ready() -> void:
 	add_theme_constant_override("separation", 6)
 	_build()
 	manager.states_changed.connect(_rebuild)
+	resized.connect(_fit_detail)
 	manager.restart_recommended.connect(_offer_restart)
 	manager.scan_requested.connect(_scan_soon)
 	manager.restart_required.connect(_on_restart_required)
@@ -302,13 +305,20 @@ func _build() -> void:
 	_tree.set_column_expand(2, false)
 	var scale := EditorInterface.get_editor_scale()
 	_tree.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_tree.custom_minimum_size = Vector2(0, 160)
+	_tree.custom_minimum_size = Vector2(0, roundi(120 * scale))
 	_tree.item_selected.connect(_on_item_selected)
 	_tree.allow_rmb_select = true
 	_tree.item_mouse_selected.connect(_on_item_mouse_selected)
 	_tree.item_activated.connect(_on_item_activated)
 	_tree.resized.connect(_on_tree_resized)
-	add_child(_tree)
+	# The list and the detail share the height; drag the border between them to give one more room.
+	var split := VSplitContainer.new()
+	split.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	add_child(split)
+	var list_box := VBoxContainer.new()
+	list_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	split.add_child(list_box)
+	list_box.add_child(_tree)
 	for boundary in [1, 2]:
 		var grip := ColumnGrip.new()
 		grip.dragged.connect(_on_grip_dragged.bind(boundary))
@@ -317,7 +327,7 @@ func _build() -> void:
 		_grips.append(grip)
 
 	_unregistered_box = VBoxContainer.new()
-	add_child(_unregistered_box)
+	list_box.add_child(_unregistered_box)
 	var unregistered_title := Label.new()
 	unregistered_title.text = "Project addons not in the registry"
 	unregistered_title.tooltip_text = "Loadout does not manage these plugins. Add them to the registry to keep them in sync across projects."
@@ -327,20 +337,29 @@ func _build() -> void:
 	_unregistered_rows = VBoxContainer.new()
 	_unregistered_box.add_child(_unregistered_rows)
 
-	add_child(HSeparator.new())
+	# The detail is as tall as its content (see _fit_detail()); past that it scrolls instead of pushing
+	# the list away.
+	_detail_scroll = ScrollContainer.new()
+	_detail_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	split.add_child(_detail_scroll)
+	_detail_box = VBoxContainer.new()
+	_detail_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_detail_box.add_theme_constant_override("separation", 6)
+	_detail_scroll.add_child(_detail_box)
+	var detail := _detail_box
 	_detail_title = Label.new()
 	_detail_title.add_theme_font_override("font", _theme_font("bold"))
 	_detail_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	add_child(_detail_title)
+	detail.add_child(_detail_title)
 	_detail_message = Label.new()
 	_detail_message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	add_child(_detail_message)
+	detail.add_child(_detail_message)
 	_detail_grid = GridContainer.new()
 	_detail_grid.columns = 2
 	_detail_grid.add_theme_constant_override("h_separation", 12)
-	add_child(_detail_grid)
+	detail.add_child(_detail_grid)
 	_detail_actions = HFlowContainer.new()
-	add_child(_detail_actions)
+	detail.add_child(_detail_actions)
 	_context_menu = PopupMenu.new()
 	_context_menu.id_pressed.connect(func(index: int) -> void: _run(_menu_actions[index]["callable"], _action_label(_menu_actions[index])))
 	add_child(_context_menu)
@@ -596,6 +615,7 @@ func _update_detail() -> void:
 			_detail_message.text = "The registry is empty. Add a plugin with the + button."
 		else:
 			_detail_message.text = "Select a plugin in the list."
+		_fit_detail.call_deferred()
 		return
 	var folder := state.entry.folder if state.entry != null else state.id
 	_detail_title.text = "%s  (addons/%s)" % [state.display_name, folder]
@@ -618,6 +638,15 @@ func _update_detail() -> void:
 			_detail_actions.add_child(_action_button(action))
 	if not removals.is_empty():
 		_detail_actions.add_child(_removal_menu(removals))
+	_fit_detail.call_deferred()
+
+
+## Gives the detail the height of its content, at most 60 % of the dock (dragging the border still
+## moves it). Deferred: the new rows have their size one frame later.
+func _fit_detail() -> void:
+	var lowest := 80.0 * EditorInterface.get_editor_scale()
+	var wanted := _detail_box.get_combined_minimum_size().y
+	_detail_scroll.custom_minimum_size.y = clampf(wanted, lowest, maxf(lowest, size.y * 0.6))
 
 
 ## The actions of a plugin, in the order the detail panel shows them.
