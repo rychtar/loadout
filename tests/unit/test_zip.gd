@@ -14,6 +14,30 @@ func _extract(name: String, prefix: String, folder: String = "fake_a") -> Dictio
 	return result
 
 
+func test_declared_sizes_are_read_from_the_zip() -> void:
+	var dir := temp_dir("zip_sizes")
+	var zip_path := dir.path_join("package.zip")
+	make_raw_zip(zip_path, { "addons/p/plugin.cfg": "[plugin]\nversion=\"1.0.0\"\n", "addons/p/big.txt": "x".repeat(5000) })
+	var sizes := Zip.declared_sizes(zip_path)
+	check_eq(sizes.get("addons/p/big.txt"), 5000, "unpacked size of a compressed entry")
+	var reader := ZIPReader.new()
+	reader.open(zip_path)
+	check_eq(PackedStringArray(sizes.keys()), reader.get_files(), "every entry ZIPReader lists")
+	reader.close()
+	check(Zip.declared_sizes(dir.path_join("missing.zip")).is_empty(), "no zip, no sizes")
+
+
+func test_a_package_too_large_is_refused_before_unpacking() -> void:
+	var dir := temp_dir("zip_too_large")
+	var zip_path := dir.path_join("package.zip")
+	make_raw_zip(zip_path, { "addons/p/plugin.cfg": "[plugin]\nversion=\"1.0.0\"\n", "addons/p/big.txt": "x".repeat(5000) })
+	var dest := dir.path_join("out")
+	var result := Zip.extract_plugin(zip_path, "p", dest, 4000)
+	check(not result["ok"] and str(result["error"]).contains("MB"), "refused: %s" % result["error"])
+	check(not DirAccess.dir_exists_absolute(dest), "nothing unpacked")
+	check(Zip.extract_plugin(zip_path, "p", dir.path_join("out2"), 6000)["ok"], "fits under a larger limit")
+
+
 func test_release_asset_layout() -> void:
 	var result := _extract("asset", "addons/fake_a/")
 	check(result["ok"], "ok: %s" % result["error"])
