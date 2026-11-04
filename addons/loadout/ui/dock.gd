@@ -588,6 +588,8 @@ func _update_detail() -> void:
 	var state := manager.get_state(_selected_id)
 	if state == null:
 		_detail_title.text = ""
+		# A plugin without a message hid the line; the hint needs it back.
+		_detail_message.visible = true
 		if not manager.loaded:
 			_detail_message.text = "Reading the registry and checking the sources…"
 		elif manager.states.is_empty() and manager.errors.is_empty():
