@@ -99,7 +99,7 @@ var _backup_dialog: BackupDialog
 var _export_dialog: EditorFileDialog
 var _import_dialog: EditorFileDialog
 var _on_confirm: Callable
-## Actions _add_actions() collects for one plugin: [{ "text", "callable", "primary", "available" }].
+## Actions _add_actions() collects for one plugin: [{ "text", "callable", "primary", "available", "danger" }].
 var _collected_actions: Array[Dictionary] = []
 ## Right-click menu of the plugin list and the actions its items stand for (by index).
 var _context_menu: PopupMenu
@@ -555,8 +555,15 @@ func _update_detail() -> void:
 	if state.lock_entry != null:
 		var lock := state.lock_entry
 		_add_row("Lock", "%s%s · %s · %s" % [lock.version, " (pin)" if lock.pinned else "", lock.folder_hash.substr(7, 8) if lock.folder_hash != "" else "no hash", lock.installed_at])
+	# Removals sit in one menu at the end, away from the actions a click can undo.
+	var removals: Array[Dictionary] = []
 	for action in _actions_for(state):
-		_detail_actions.add_child(_action_button(action))
+		if action["danger"]:
+			removals.append(action)
+		else:
+			_detail_actions.add_child(_action_button(action))
+	if not removals.is_empty():
+		_detail_actions.add_child(_removal_menu(removals))
 
 
 ## The actions of a plugin, in the order the detail panel shows them.
@@ -601,11 +608,20 @@ func _on_item_mouse_selected(mouse_position: Vector2, button_index: int) -> void
 	var state := manager.get_state(_selected_id)
 	if state == null:
 		return
-	_menu_actions = _actions_for(state)
+	# Same order as the detail panel: the removals last, after a separator.
+	var removals: Array[Dictionary] = []
+	_menu_actions = []
+	for action in _actions_for(state):
+		(removals if action["danger"] else _menu_actions).append(action)
+	_menu_actions.append_array(removals)
 	_context_menu.clear()
+	var separated := false
 	for index in _menu_actions.size():
+		if _menu_actions[index]["danger"] and not separated and index > 0:
+			_context_menu.add_separator()
+			separated = true
 		_context_menu.add_item(_menu_actions[index]["text"], index)
-		_context_menu.set_item_disabled(index, _busy or not _menu_actions[index]["available"])
+		_context_menu.set_item_disabled(_context_menu.item_count - 1, _busy or not _menu_actions[index]["available"])
 	_context_menu.reset_size()
 	_context_menu.position = Vector2i(_tree.get_screen_position() + mouse_position)
 	_context_menu.popup()
@@ -653,7 +669,7 @@ func _add_actions(state: LoadoutManager.PluginState) -> void:
 		_action("Edit…", func() -> void: _registry_dialog.open_edit(state.entry, state.display_name))
 		_action("Remove from registry…", func() -> void:
 			_ask("Remove %s from the global registry? This affects all projects. Files in this project stay." % state.display_name,
-					"Remove from registry", func() -> Error: return await manager.remove_registry_entry(id)))
+					"Remove from registry", func() -> Error: return await manager.remove_registry_entry(id)), false, true, true)
 
 
 func _confirm_update(state: LoadoutManager.PluginState) -> void:
@@ -758,7 +774,7 @@ func _remove_action(state: LoadoutManager.PluginState) -> void:
 		return
 	_action("Remove from project…", func() -> void:
 		_ask("Remove %s from this project? The folder is backed up to user://loadout_backup/%s/ and Loadout stops installing it here." % [state.display_name, state.id],
-				"Remove", func() -> Dictionary: return await manager.uninstall(state.id)))
+				"Remove", func() -> Dictionary: return await manager.uninstall(state.id)), false, true, true)
 
 
 func _install_selected(ids: PackedStringArray, ignore: PackedStringArray) -> Dictionary:
@@ -917,8 +933,9 @@ func _on_item_selected() -> void:
 
 ## Adds an action of the plugin _actions_for() collects. available false: shown, but disabled
 ## (nothing to install), also when an action ends.
-func _action(text: String, callable: Callable, primary: bool = false, available: bool = true) -> void:
-	_collected_actions.append({ "text": text, "callable": callable, "primary": primary, "available": available })
+## danger: it removes something (the dock puts it in the Remove menu).
+func _action(text: String, callable: Callable, primary: bool = false, available: bool = true, danger: bool = false) -> void:
+	_collected_actions.append({ "text": text, "callable": callable, "primary": primary, "available": available, "danger": danger })
 
 
 func _action_button(action: Dictionary) -> Button:
@@ -931,6 +948,23 @@ func _action_button(action: Dictionary) -> Button:
 	var callable: Callable = action["callable"]
 	button.pressed.connect(func() -> void: _run(callable))
 	return button
+
+
+## "Remove ▾" with the removals of the plugin (each one still asks before it removes anything).
+func _removal_menu(actions: Array[Dictionary]) -> MenuButton:
+	var menu := MenuButton.new()
+	menu.text = "Remove"
+	menu.flat = false
+	menu.tooltip_text = "Remove the plugin from this project or from the global registry."
+	menu.icon = EditorInterface.get_editor_theme().get_icon("GuiOptionArrow", "EditorIcons")
+	menu.icon_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	menu.disabled = _busy
+	menu.set_meta(UNAVAILABLE_META, false)
+	var popup := menu.get_popup()
+	for index in actions.size():
+		popup.add_item(str(actions[index]["text"]).trim_prefix("Remove "), index)
+	popup.id_pressed.connect(func(index: int) -> void: _run(actions[index]["callable"]))
+	return menu
 
 
 func _add_row(caption: String, value: String, tooltip: String = "") -> void:

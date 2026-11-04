@@ -242,6 +242,9 @@ func _dock_context_menu() -> void:
 	for index in menu.item_count:
 		texts.append(menu.get_item_text(index))
 	_expect(texts.size() > 0 and texts[0].begins_with("Update to"), "the menu starts with the update (%s)" % ", ".join(texts))
+	_expect(texts.size() > 0 and texts[-1].begins_with("Remove from"), "the removals come last (%s)" % ", ".join(texts))
+	_expect(_find_button(_dock, "Remove from") == null and _find_button(_dock, "Remove") is MenuButton,
+			"the detail panel keeps the removals in the Remove menu")
 	await _screenshot("dock_context_menu", menu)
 	menu.hide()
 	await _dialog_closed(menu)
