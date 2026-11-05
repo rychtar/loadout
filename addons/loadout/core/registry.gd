@@ -29,7 +29,8 @@ const _RESERVED_NAMES: PackedStringArray = ["con", "prn", "aux", "nul", "com1", 
 class Entry:
 	var id: String
 	var folder: String
-	## { "type": "local", "path": String }, { "type": "github", "repo": "owner/name" }
+	## { "type": "local", "path": String, "version": String (optional, for a folder whose plugin.cfg
+	## has no version, e.g. a GDExtension) }, { "type": "github", "repo": "owner/name" }
 	## { "type": "store", "asset": "publisher/slug" } or { "type": "assetlib", "asset_id": "1234" }
 	var source: Dictionary
 	var version_range: String = "*"
@@ -274,7 +275,13 @@ static func _parse_known_source(data: Variant) -> Dictionary:
 			var path: Variant = data.get("path", "")
 			if typeof(path) != TYPE_STRING or not path.is_absolute_path() or path.contains("://"):
 				return { "error": "a local source needs an absolute path" }
-			return { "error": "", "source": { "type": SOURCE_LOCAL, "path": path } }
+			var local := { "type": SOURCE_LOCAL, "path": path }
+			if data.has("version"):
+				var version: Variant = data["version"]
+				if typeof(version) != TYPE_STRING or LoadoutVersion.parse(version) == null:
+					return { "error": "invalid local version %s (expected major.minor.patch)" % var_to_str(version) }
+				local["version"] = version
+			return { "error": "", "source": local }
 		SOURCE_GITHUB:
 			var repo: Variant = data.get("repo", "")
 			if typeof(repo) != TYPE_STRING:

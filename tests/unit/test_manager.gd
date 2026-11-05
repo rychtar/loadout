@@ -811,6 +811,17 @@ func _fake_ext(id: String, versions: Array[String]) -> FakeSource:
 	return source
 
 
+func test_local_extension_with_a_registry_version() -> void:
+	var path := ProjectSettings.globalize_path(EXT_FIXTURES.path_join("1.0.0"))
+	_setup("native_local", [{ "id": "fake_ext", "folder": "fake_ext", "source": { "type": "local", "path": path, "version": "1.0.0" } }])
+	await manager.refresh()
+	check_eq(_status("fake_ext"), Manager.Status.MISSING, "offered: %s" % manager.get_state("fake_ext").message)
+	var result: Dictionary = await manager.install("fake_ext")
+	check(result["ok"] and result["native"], "installed as native code: %s" % result["error"])
+	check_eq(_saved_lock().get_entry("fake_ext").version, "1.0.0", "the registry version in the lock")
+	check_eq(_status("fake_ext"), Manager.Status.OK, "up to date")
+
+
 func test_native_install_and_update() -> void:
 	_setup("native", [_ext("fake_ext", { "range": "^1.0.0" })])
 	var source := _fake_ext("fake_ext", ["1.0.0"])

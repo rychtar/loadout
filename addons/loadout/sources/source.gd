@@ -200,7 +200,9 @@ static func create(entry: LoadoutRegistry.Entry, http: LoadoutHttp = null, githu
 		godot_version: String = "") -> LoadoutSource:
 	match entry.source.get("type"):
 		LoadoutRegistry.SOURCE_LOCAL:
-			return LoadoutLocalSource.new(entry.source["path"])
+			var local := LoadoutLocalSource.new(entry.source["path"])
+			local.version_override = str(entry.source.get("version", ""))
+			return local
 		LoadoutRegistry.SOURCE_GITHUB:
 			if http != null:
 				return LoadoutGithubSource.new(entry.source["repo"], entry.folder, http, github_token)

@@ -361,10 +361,29 @@ func _dock_add_dialogs() -> void:
 	var folder := (_registry_dialog.get("_folder_edit") as LineEdit).text
 	_expect(folder == "debug_draw_3d", "folder suggested from the title (%s)" % folder)
 	await _screenshot("dock_add_store", _registry_dialog)
+	await _dock_add_local_extension()
 	_registry_dialog.hide()
 	await _dialog_closed(_registry_dialog)
 	await _installer.uninstall(_entry)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(LoadoutLockfile.DEFAULT_PATH))
+
+
+## A local folder with a .gdextension and no plugin.cfg: the dialog asks for the version of its files.
+func _dock_add_local_extension() -> void:
+	_select_source(1)
+	var path_edit: LineEdit = _registry_dialog.get("_path_edit")
+	path_edit.text = ProjectSettings.globalize_path("res://tests/fixtures/addons/fake_ext/1.0.0")
+	path_edit.text_changed.emit(path_edit.text)
+	var version_row: Control = _registry_dialog.get("_local_version_row")
+	var ok := _registry_dialog.get_ok_button()
+	_expect(version_row.visible and ok.disabled, "a folder without plugin.cfg asks for its version first")
+	var version_edit: LineEdit = _registry_dialog.get("_local_version_edit")
+	version_edit.text = "1.0.0"
+	version_edit.text_changed.emit(version_edit.text)
+	_expect(not ok.disabled, "with the version it can be added")
+	var source: Dictionary = (_registry_dialog.call("_entry_data") as Dictionary)["source"]
+	_expect(source.get("version") == "1.0.0", "the version goes into the registry entry (%s)" % source)
+	await _screenshot("dock_add_local_extension", _registry_dialog)
 
 
 ## The starter plugins dialog (a canned pack with a local source, no network): choose, add to the

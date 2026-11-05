@@ -9,6 +9,8 @@ signal entry_submitted(data: Dictionary, take_over: bool)
 ## Edit mode: the changed entry (id and folder stay, see LoadoutManager.update_registry_entry()).
 signal entry_edited(id: String, data: Dictionary)
 
+const Package := preload("../util/package.gd")
+
 const SOURCE_GITHUB := 0
 const SOURCE_LOCAL := 1
 const SOURCE_STORE := 2
@@ -38,6 +40,9 @@ var _repo_edit: LineEdit
 var _auto_names := true
 var _setting_names := false
 var _path_edit: LineEdit
+## Shown for a local folder whose plugin.cfg has no version (an extension): the version of its files.
+var _local_version_row: HBoxContainer
+var _local_version_edit: LineEdit
 var _info_label: Label
 var _error_label: Label
 var _id_edit: LineEdit
@@ -104,7 +109,7 @@ func _init() -> void:
 
 	_local_box = VBoxContainer.new()
 	box.add_child(_local_box)
-	_local_box.add_child(_caption("Local plugin folder (contains plugin.cfg)"))
+	_local_box.add_child(_caption("Local plugin folder (contains plugin.cfg or a .gdextension)"))
 	var path_row := HBoxContainer.new()
 	_local_box.add_child(path_row)
 	_path_edit = LineEdit.new()
@@ -119,6 +124,15 @@ func _init() -> void:
 
 	_info_label = _wrapped(Label.new(), width)
 	_local_box.add_child(_info_label)
+	_local_version_row = HBoxContainer.new()
+	_local_version_row.visible = false
+	_local_box.add_child(_local_version_row)
+	_local_version_row.add_child(_caption("Version of these files"))
+	_local_version_edit = LineEdit.new()
+	_local_version_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_local_version_edit.placeholder_text = "1.0.0"
+	_local_version_edit.text_changed.connect(func(_text: String) -> void: _validate())
+	_local_version_row.add_child(_local_version_edit)
 	_error_label = _wrapped(Label.new(), width)
 	_error_label.add_theme_color_override("font_color", Color(0.94, 0.57, 0.54))
 	box.add_child(_error_label)
@@ -167,6 +181,8 @@ func open() -> void:
 	_auto_names = true
 	_repo_edit.text = ""
 	_path_edit.text = ""
+	_local_version_edit.text = ""
+	_local_version_row.visible = false
 	_query_edit.text = ""
 	_results.clear()
 	_store_asset = ""
@@ -223,6 +239,7 @@ func open_edit(entry: LoadoutRegistry.Entry, display_name: String) -> void:
 		LoadoutRegistry.SOURCE_LOCAL:
 			_select_source(SOURCE_LOCAL)
 			_path_edit.text = entry.source["path"]
+			_local_version_edit.text = str(entry.source.get("version", ""))
 		LoadoutRegistry.SOURCE_STORE:
 			_select_source(SOURCE_STORE)
 			_store_asset = entry.source["asset"]
@@ -345,31 +362,47 @@ func _on_dir_selected(dir: String) -> void:
 ## would jump under the cursor; _source_data() resolves the folder either way.
 func _update_from_path(rewrite: bool = false) -> void:
 	var path := _plugin_dir(_path_edit.text.strip_edges())
-	var cfg := ConfigFile.new()
-	if path == "" or cfg.load(path.path_join("plugin.cfg")) != OK:
-		_info_label.text = "Select a folder that contains plugin.cfg." if _path_edit.text.strip_edges() != "" else ""
+	if path == "":
+		_info_label.text = "Select a folder that contains plugin.cfg or a .gdextension." if _path_edit.text.strip_edges() != "" else ""
+		_local_version_row.visible = false
 		_validate()
 		return
 	if rewrite and path != _path_edit.text.strip_edges():
 		_path_edit.text = path
-	_info_label.text = "Found plugin %s, version %s." % [cfg.get_value("plugin", "name", "?"), cfg.get_value("plugin", "version", "?")]
+	var cfg := ConfigFile.new()
+	cfg.load(path.path_join("plugin.cfg"))
+	var plugin_name := str(cfg.get_value("plugin", "name", path.trim_suffix("/").get_file()))
+	var version := str(cfg.get_value("plugin", "version", ""))
+	# Without a version in plugin.cfg (an extension) the registry entry says which version the files are.
+	_local_version_row.visible = version == ""
+	if version == "":
+		_info_label.text = "Found %s, which has no plugin.cfg with a version (an extension). Enter the version of these files." % plugin_name
+	else:
+		_info_label.text = "Found plugin %s, version %s." % [plugin_name, version]
 	if _auto_names:
 		_set_names(path.trim_suffix("/").get_file())
 	_validate()
 
 
-## Accepts the plugin folder itself or a project folder with exactly one plugin in addons/.
+## Accepts the add-on folder itself (plugin.cfg or a .gdextension) or a project folder with exactly
+## one add-on in addons/.
 func _plugin_dir(path: String) -> String:
 	if path == "" or not DirAccess.dir_exists_absolute(path):
 		return ""
-	if FileAccess.file_exists(path.path_join("plugin.cfg")):
+	if Package.has_plugin_cfg(path):
 		return path
+	# A project or repository folder: its single add-on in addons/. Checked before the folder's own
+	# .gdextension search, which would find the add-ons below it too.
 	var addons := path.path_join("addons")
 	var found: PackedStringArray = []
 	for sub_dir in DirAccess.get_directories_at(addons):
-		if FileAccess.file_exists(addons.path_join(sub_dir).path_join("plugin.cfg")):
+		if Package.is_addon(addons.path_join(sub_dir)):
 			found.append(addons.path_join(sub_dir))
-	return found[0] if found.size() == 1 else ""
+	if found.size() == 1:
+		return found[0]
+	if found.is_empty() and Package.has_extension(path) and not FileAccess.file_exists(path.path_join("project.godot")):
+		return path
+	return ""
 
 
 func _validate() -> void:
@@ -380,7 +413,8 @@ func _validate() -> void:
 		SOURCE_STORE:
 			has_source = _store_asset != "" or not _legacy_source.is_empty()
 		SOURCE_LOCAL:
-			has_source = _plugin_dir(_path_edit.text.strip_edges()) != ""
+			has_source = _plugin_dir(_path_edit.text.strip_edges()) != "" \
+					and (not _local_version_row.visible or _local_version_edit.text.strip_edges() != "")
 	var parsed := LoadoutRegistry.parse_entry(_entry_data())
 	_error_label.text = parsed["error"] if has_source and not parsed["ok"] else ""
 	_error_label.visible = _error_label.text != ""
@@ -408,7 +442,10 @@ func _source_data() -> Dictionary:
 			return { "type": LoadoutRegistry.SOURCE_STORE, "asset": _store_asset }
 	var typed := _path_edit.text.strip_edges()
 	var plugin_dir := _plugin_dir(typed)
-	return { "type": LoadoutRegistry.SOURCE_LOCAL, "path": plugin_dir if plugin_dir != "" else typed }
+	var local := { "type": LoadoutRegistry.SOURCE_LOCAL, "path": plugin_dir if plugin_dir != "" else typed }
+	if _local_version_row.visible and _local_version_edit.text.strip_edges() != "":
+		local["version"] = _local_version_edit.text.strip_edges()
+	return local
 
 
 func _on_confirmed() -> void:

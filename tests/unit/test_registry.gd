@@ -125,6 +125,18 @@ func test_unreadable_entries_survive_a_save() -> void:
 	check(text.contains("\"count\": 5,") and text.contains("\"release_id\": 7"), "whole numbers stay whole: %s" % text)
 
 
+func test_local_source_version() -> void:
+	var registry := _from_entries([
+		_entry({ "id": "ext", "folder": "ext", "source": { "type": "local", "path": "/plugins/ext", "version": "2.5.0" } }),
+		_entry({ "id": "bad", "folder": "bad", "source": { "type": "local", "path": "/plugins/bad", "version": "latest" } }),
+		_entry({ "id": "num", "folder": "num", "source": { "type": "local", "path": "/plugins/num", "version": 2 } }),
+	])
+	var ext := registry.get_entry("ext")
+	check(ext != null and ext.source.get("version") == "2.5.0", "the version of a folder without plugin.cfg is kept")
+	check(registry.get_entry("bad") == null and registry.get_entry("num") == null, "an invalid version is refused")
+	check_eq(registry.warnings.size(), 2, "warning per refused entry")
+
+
 func test_add_and_remove() -> void:
 	var registry := _from_entries([])
 	check_eq(registry.add_entry(_entry({ "id": "a", "folder": "a" })), "", "add valid")
