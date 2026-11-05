@@ -79,6 +79,7 @@ func run(mode: String) -> bool:
 		_tree.create_timer(NATIVE_SETTLE_S).timeout.connect(_native_verify_check, CONNECT_ONE_SHOT)
 		await _tree.create_timer(NATIVE_GUARD_S).timeout
 		_expect(false, "the check did not run in %d s" % NATIVE_GUARD_S)
+		Engine.remove_meta("loadout_smoke")
 		return false
 	var filesystem := EditorInterface.get_resource_filesystem()
 	while filesystem.is_scanning():
@@ -604,6 +605,8 @@ func _run_native() -> void:
 	# The scan ends this coroutine (script reload); _native_check finishes the test. The timer is only a guard.
 	await _tree.create_timer(NATIVE_GUARD_S).timeout
 	_expect(false, "the scan did not finish the test in %d s" % NATIVE_GUARD_S)
+	# Released before the editor quits, or it crashes on exit.
+	Engine.remove_meta("loadout_smoke")
 
 
 func _native_scan_requested() -> void:
