@@ -1096,6 +1096,7 @@ func _removal_menu(actions: Array[Dictionary]) -> MenuButton:
 func _add_links(state: LoadoutManager.PluginState) -> void:
 	var links := HFlowContainer.new()
 	links.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	links.add_theme_constant_override("h_separation", roundi(12 * EditorInterface.get_editor_scale()))
 	for link: Array in [["Plugin page", state.source_url], ["Release notes", state.release_url if state.release_url != state.source_url else ""]]:
 		if str(link[1]) == "":
 			continue
@@ -1111,7 +1112,14 @@ func _add_links(state: LoadoutManager.PluginState) -> void:
 	key.text = "Links"
 	key.modulate = Color(1, 1, 1, 0.7)
 	_detail_grid.add_child(key)
-	_detail_grid.add_child(links)
+	# A LinkButton has no margins; a Label's text starts after its style's: line them up with the rows above.
+	var label_style := get_theme_stylebox("normal", "Label")
+	var aligned := MarginContainer.new()
+	aligned.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	aligned.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	aligned.add_theme_constant_override("margin_left", roundi(label_style.get_margin(SIDE_LEFT)) if label_style != null else 0)
+	aligned.add_child(links)
+	_detail_grid.add_child(aligned)
 
 
 func _add_row(caption: String, value: String, tooltip: String = "") -> void:

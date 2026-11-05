@@ -224,6 +224,7 @@ func _dock_update() -> void:
 	_expect(updates == PackedStringArray(["fake_a"]), "update offered in the dock (%s)" % updates)
 	_select_first_plugin()
 	await _screenshot("dock_update_available")
+	await _dock_links()
 	var update_button := _find_button(_dock, "Update to 1.1.0")
 	_expect(update_button != null, "update button in the detail")
 	await _dock_context_menu()
@@ -241,6 +242,22 @@ func _dock_update() -> void:
 		await _screenshot("dock_restart_offer", _confirm)
 		_confirm.get_cancel_button().pressed.emit()
 		await _dialog_closed(_confirm)
+
+
+## A local source has no web page: give the state one to see the links row in the detail.
+func _dock_links() -> void:
+	var state := _manager.get_state("fake_a")
+	state.source_url = "https://example.com/fake_a"
+	state.release_url = "https://example.com/fake_a/releases/1.1.0"
+	_dock.call("_update_detail")
+	var uris := PackedStringArray()
+	for node in _dock.find_children("*", "LinkButton", true, false):
+		uris.append((node as LinkButton).uri)
+	_expect(uris == PackedStringArray([state.source_url, state.release_url]), "plugin page and release notes linked (%s)" % uris)
+	await _screenshot("dock_links")
+	state.source_url = ""
+	state.release_url = ""
+	_dock.call("_update_detail")
 
 
 ## Right-click on the selected row: a menu with the same actions as the detail panel.
