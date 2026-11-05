@@ -24,6 +24,10 @@ extends RefCounted
 ##   process quits itself. Without --loadout-keep the add-ons are deleted again; with it, a second run
 ##   checks that they still run in a new editor session:
 ##   godot --headless -e --path <project> -- --loadout-registry=<file> --loadout-smoke=nativeverify
+##   An update of a loaded extension: install an older release first (a registry with an exact range,
+##   native --loadout-keep), then with a registry that allows the newer one
+##   godot --headless -e --path <project> -- --loadout-registry=<file> --loadout-smoke=nativeupdate
+##   (files replaced with a backup, a restart asked for, no scan) and nativeverify in a new session.
 ## Self-update (GUI or headless; registry has a "loadout" entry pointing to a newer Loadout copy):
 ##   godot -e --path <project> -- --loadout-registry=<file> --loadout-smoke=self
 ##   first run updates Loadout from the dock and the editor restarts itself. Godot relaunches it
@@ -72,11 +76,12 @@ func _init(tree: SceneTree, plugin: EditorPlugin = null) -> void:
 
 
 func run(mode: String) -> bool:
-	if mode == "nativeverify":
+	if mode == "nativeverify" or mode == "nativeupdate":
 		# An extension that does not load at startup is tried again by the first scan, which reloads every
 		# script and cancels this coroutine: the check runs from a timer and quits the editor itself.
 		Engine.set_meta("loadout_smoke", self)
-		_tree.create_timer(NATIVE_SETTLE_S).timeout.connect(_native_verify_check, CONNECT_ONE_SHOT)
+		var check := _native_verify_check if mode == "nativeverify" else _native_update_check
+		_tree.create_timer(NATIVE_SETTLE_S).timeout.connect(check, CONNECT_ONE_SHOT)
 		await _tree.create_timer(NATIVE_GUARD_S).timeout
 		_expect(false, "the check did not run in %d s" % NATIVE_GUARD_S)
 		Engine.remove_meta("loadout_smoke")
@@ -676,6 +681,40 @@ func _native_check() -> void:
 	_tree.quit(0 if _failures.is_empty() else 1)
 
 
+func _native_update_check() -> void:
+	await _run_native_update()
+	_finish_from_timer("nativeupdate")
+
+
+## A session with the older release loaded: updates it. The editor cannot swap a loaded library, so
+## the files are replaced (with a backup) and a restart is asked for, without a scan.
+func _run_native_update() -> void:
+	var manager: LoadoutManager = _plugin.get_manager()
+	await _wait_until(func() -> bool: return manager.loaded, 60000)
+	await manager.refresh(true)
+	var restarts: Array[int] = [0]
+	var scans: Array[int] = [0]
+	manager.restart_recommended.connect(func() -> void: restarts[0] += 1)
+	manager.scan_requested.connect(func() -> void: scans[0] += 1)
+	var ids := manager.update_ids()
+	_expect(not ids.is_empty(), "an update is offered (%s)" % ", ".join(PackedStringArray(manager.states.map(
+			func(state: LoadoutManager.PluginState) -> String: return "%s %s" % [state.id, LoadoutManager.Status.find_key(state.status)]))))
+	for id in ids:
+		var before := manager.get_state(id)
+		var from := before.installed_version
+		var to := before.target_version
+		_expect(before.native, "%s is native code" % id)
+		var result: Dictionary = await manager.install(id)
+		_expect(result["ok"], "%s updated: %s" % [id, result["error"]])
+		_expect(result["native"] and result["restart_recommended"] and not result.get("scan_wanted", false),
+				"%s: files replaced, a restart asked for, no scan" % id)
+		_expect(Fs.has_files(str(result["backup_path"])), "%s: backup of %s in %s" % [id, from, result["backup_path"]])
+		var locked := LoadoutLockfile.load_file()["lockfile"] as LoadoutLockfile
+		_expect(locked.get_entry(id) != null and locked.get_entry(id).version == to, "%s: the lock says %s" % [id, to])
+		Log.write("nativeupdate: %s %s -> %s, backup %s" % [id, from, to, result["backup_path"]])
+	_expect(restarts[0] == ids.size() and scans[0] == 0, "one restart offer per update and no scan (%d, %d)" % [restarts[0], scans[0]])
+
+
 ## Second session after native --loadout-keep: the add-ons load at startup and their EditorPlugins run.
 func _native_verify_check() -> void:
 	var manager: LoadoutManager = _plugin.get_manager()
@@ -684,10 +723,17 @@ func _native_verify_check() -> void:
 	_expect(not manager.states.is_empty(), "the registry has the add-ons")
 	for state in manager.states:
 		_expect(state.status == LoadoutManager.Status.OK, "%s: status %s" % [state.id, LoadoutManager.Status.find_key(state.status)])
+		Log.write("nativeverify: %s %s" % [state.id, state.installed_version])
 		_expect_native_running(state, "in a new session")
+	_finish_from_timer("nativeverify")
+
+
+## Reports and quits a mode that ran from a timer (the test object is released first, or the editor
+## crashes on exit).
+func _finish_from_timer(mode: String) -> void:
 	for failure in _failures:
 		Log.write("SMOKE FAIL %s" % failure, Log.Level.ERROR)
-	Log.write("SMOKE nativeverify: %s" % ("passed" if _failures.is_empty() else "%d failed" % _failures.size()))
+	Log.write("SMOKE %s: %s" % [mode, "passed" if _failures.is_empty() else "%d failed" % _failures.size()])
 	Engine.remove_meta("loadout_smoke")
 	_tree.quit(0 if _failures.is_empty() else 1)
 
