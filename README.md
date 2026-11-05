@@ -31,7 +31,7 @@ plugins a project is missing, keeps their versions in a lock file and tells you 
 1. Copy `addons/loadout/` into your project's `addons/` folder (or install it from the Asset Store).
 2. Enable **Loadout** in **Project → Project Settings → Plugins**.
 
-You need Godot 4.5 or newer (tested on 4.5.1 and 4.7.1). For many projects, one command does both steps. It is safe to run again, and
+You need Godot 4.7 or newer (tested on 4.7.1): Loadout uses the Godot Asset Store, which came with 4.7. For many projects, one command does both steps. It is safe to run again, and
 a different Loadout version is replaced only with `--force` (close the project's editor first; the old
 version comes back if the copy fails):
 
