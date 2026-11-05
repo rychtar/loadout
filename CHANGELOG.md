@@ -27,6 +27,7 @@
 - The **Install** button of a plugin with no installable version stays disabled after another action.
 - On Windows, an editor that reads the shared registry exactly while another editor saves it reads the new content instead of an empty registry.
 - The startup offer and the update check no longer get lost when an extension in the project does not load at startup (no library for this system, for example): the editor's first scan then reloads every script, which cancelled them.
+- An install that starts while the dock is still refreshing (right after the editor starts, for example) no longer fails with "Source type … is not supported" or "Release … is unknown".
 - The dock hint ("Select a plugin in the list.") shows again after a plugin without a message was selected.
 - A package whose zip declares more than 512 MB of content is refused before anything is unpacked, not after Loadout already unpacked a huge file into memory.
 - `tools/install_loadout --force` moves the old Loadout aside while it copies the new one and puts it back when the copy fails, instead of leaving the project without Loadout.
