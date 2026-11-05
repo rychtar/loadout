@@ -590,6 +590,8 @@ func _run_native() -> void:
 	var manager: LoadoutManager = _plugin.get_manager()
 	# The dock scans and enables the plugins (its own timers); this only counts and checks afterwards.
 	manager.scan_requested.connect(_native_scan_requested)
+	# Let the startup sync finish first: it opens the install offer, which is not part of this test.
+	await _wait_until(func() -> bool: return manager.loaded, 60000)
 	await manager.refresh(true)
 	_expect(manager.errors.is_empty(), "registry and lock load: %s" % ", ".join(manager.errors))
 	var summary: Dictionary = await manager.install_missing()
