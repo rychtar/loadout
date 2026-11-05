@@ -130,16 +130,19 @@ func _init(plugin_installer: LoadoutInstaller, registry_file: String, lock_file:
 func refresh(check_updates: bool = false) -> void:
 	_load_files()
 	var new_states: Array[PluginState] = []
-	_sources.clear()
+	# Fresh sources (the registry may have changed), swapped in with the states at the end: an action
+	# that runs meanwhile (an install the startup sync overlaps) keeps the sources it started with.
+	var new_sources: Dictionary[String, LoadoutSource] = {}
 	if _registry_ok and _lock_ok:
 		for entry in registry.entries:
-			new_states.append(await _compute_state(entry, check_updates))
+			new_states.append(await _compute_state(entry, new_sources, check_updates))
 		for id in lockfile.plugins:
 			if registry.get_entry(id) == null:
 				new_states.append(_orphan_state(id))
 	checker.save_cache()
 	warnings.append_array(checker.warnings)
 	states = new_states
+	_sources = new_sources
 	unregistered.assign(_scan_unregistered() if _registry_ok else [])
 	for info in unregistered:
 		_seen_addons[info["folder"]] = true
@@ -647,21 +650,22 @@ func _load_files() -> void:
 	warnings.append_array(lockfile.warnings)
 
 
-func _compute_state(entry: LoadoutRegistry.Entry, check_updates: bool = false) -> PluginState:
+## sources: the source of every plugin by id; an entry's source is created and added when missing.
+func _compute_state(entry: LoadoutRegistry.Entry, sources: Dictionary[String, LoadoutSource], check_updates: bool = false) -> PluginState:
 	var state := PluginState.new()
 	state.id = entry.id
 	state.entry = entry
 	state.lock_entry = lockfile.get_entry(entry.id)
 	state.installed_version = installer.installed_version(entry)
 	state.native = installer.is_installed(entry) and Package.is_native(installer.target_dir(entry))
-	var source: LoadoutSource = _sources.get(entry.id)
+	var source: LoadoutSource = sources.get(entry.id)
 	if source == null:
 		source = _source_factory.call(entry)
 	var source_error := ""
 	if source == null:
 		source_error = "Source type %s is not supported." % entry.source.get("type")
 	else:
-		_sources[entry.id] = source
+		sources[entry.id] = source
 		state.source_label = source.describe()
 		state.source_url = source.page_url()
 		var loaded: Dictionary = await checker.load_releases(source, check_updates)
@@ -1051,7 +1055,7 @@ func _save_and_update(id: String) -> Error:
 	var err := _save_lock()
 	var state := get_state(id)
 	if state != null and state.entry != null:
-		var fresh := await _compute_state(state.entry)
+		var fresh := await _compute_state(state.entry, _sources)
 		# A refresh may have replaced the list while the state was computed.
 		var index := states.find(state)
 		if index >= 0:

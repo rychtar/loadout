@@ -103,6 +103,22 @@ func test_install_missing_writes_lock() -> void:
 	check(manager.missing_ids().is_empty(), "nothing missing")
 
 
+func test_an_install_during_a_refresh_keeps_its_source() -> void:
+	_setup("refresh_race", [_local("slow", "1.0.0", { "folder": "slow" }), _local("fake_a", "1.0.0")])
+	var slow := _fake("slow", ["1.0.0"])
+	_fake("fake_a", ["1.0.0"])
+	await manager.refresh()
+	# The startup sync's refresh is still asking the first source when the user installs the second plugin.
+	slow.list_delay_frames = 3
+	manager.refresh()
+	var result: Dictionary = await manager.install("fake_a")
+	check(result["ok"], "installed although a refresh runs: %s" % result["error"])
+	for i in 10:
+		await (Engine.get_main_loop() as SceneTree).process_frame
+	check_eq(_status("fake_a"), Manager.Status.OK, "the states are right once both are done")
+	check(manager.get_source("fake_a") != null, "the plugin keeps a source")
+
+
 func test_a_batch_refreshes_once() -> void:
 	_setup("batch_refresh", [_local("fake_a", "1.0.0"), _local("fake_b", "1.0.0", { "folder": "fake_b" })])
 	_fake("fake_b", ["1.0.0"])
