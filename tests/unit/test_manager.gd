@@ -119,6 +119,33 @@ func test_an_install_during_a_refresh_keeps_its_source() -> void:
 	check(manager.get_source("fake_a") != null, "the plugin keeps a source")
 
 
+func test_add_a_project_plugin_to_the_library() -> void:
+	_setup("library", [])
+	Fs.copy_dir(FIXTURES.path_join("1.0.0"), addons.path_join("fake_a"))
+	var library := root.path_join("library/fake_a")
+	var data := { "id": "fake_a", "folder": "fake_a", "source": { "type": "local", "path": ProjectSettings.globalize_path(library) } }
+	await manager.refresh()
+	check_eq(await manager.add_to_library(data, "fake_a"), "", "added")
+	check_eq(Fs.hash_dir(library), Fs.hash_dir(FIXTURES.path_join("1.0.0")), "the files are in the library")
+	check_eq(Registry.load_file(_registry_path())["registry"].get_entry("fake_a").source["path"], ProjectSettings.globalize_path(library), "registered from there")
+	check(_saved_lock().get_entry("fake_a") != null, "the project's files are taken over")
+	check_eq(_status("fake_a"), Manager.Status.OK, "up to date with the library copy")
+	check(editor.calls.is_empty(), "nothing toggled")
+
+
+func test_library_copy_is_never_overwritten() -> void:
+	_setup("library_exists", [_local("other", "1.0.0", { "folder": "fake_a" })])
+	Fs.copy_dir(FIXTURES.path_join("1.0.0"), addons.path_join("fake_b"))
+	var library := root.path_join("library/fake_b")
+	Fs.copy_dir(FIXTURES.path_join("1.1.0"), library)
+	var data := { "id": "fake_b", "folder": "fake_b", "source": { "type": "local", "path": ProjectSettings.globalize_path(library) } }
+	check(await manager.add_to_library(data, "fake_b") != "", "other files in the library folder are refused")
+	check_eq(Fs.hash_dir(library), Fs.hash_dir(FIXTURES.path_join("1.1.0")), "and left alone")
+	var taken := { "id": "other", "folder": "fake_b", "source": { "type": "local", "path": ProjectSettings.globalize_path(root.path_join("library/new")) } }
+	check(await manager.add_to_library(taken, "fake_b") != "", "an id already in the registry is refused")
+	check(not DirAccess.dir_exists_absolute(root.path_join("library/new")), "the copy made for it is removed again")
+
+
 func test_a_batch_refreshes_once() -> void:
 	_setup("batch_refresh", [_local("fake_a", "1.0.0"), _local("fake_b", "1.0.0", { "folder": "fake_b" })])
 	_fake("fake_b", ["1.0.0"])

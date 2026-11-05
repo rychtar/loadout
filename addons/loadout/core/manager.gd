@@ -458,6 +458,37 @@ func add_registry_entry(data: Dictionary, take_over: bool = false) -> String:
 	return ""
 
 
+## Copies a plugin of the project's addons folder into the plugin library (the entry's local source
+## path) and adds the entry, taking over the project's files, so other projects get it from the copy.
+## An existing library folder is used when it holds the same files, never overwritten. Returns "" or
+## an error message.
+func add_to_library(data: Dictionary, project_folder: String) -> String:
+	var parsed := LoadoutRegistry.parse_entry(data)
+	if not parsed["ok"]:
+		return parsed["error"]
+	var entry: LoadoutRegistry.Entry = parsed["entry"]
+	if entry.source.get("type") != LoadoutRegistry.SOURCE_LOCAL:
+		return "A library copy needs a local folder source."
+	var project_dir := installer.addons_dir.path_join(project_folder)
+	if not Package.is_addon(project_dir):
+		return "addons/%s holds no plugin to copy." % project_folder
+	var library_copy: String = entry.source["path"]
+	var created := false
+	if Fs.has_files(library_copy):
+		if Fs.hash_dir(library_copy) != Fs.hash_dir(project_dir):
+			return "%s already exists with other files. Remove it or set another library folder (Editor Settings → Loadout → Library Path)." % library_copy
+	else:
+		var err := Fs.copy_dir(project_dir, library_copy, Fs.DEFAULT_EXCLUDE)
+		if err != OK:
+			Fs.remove_dir(library_copy)
+			return "Copying addons/%s to %s failed: %s" % [project_folder, library_copy, error_string(err)]
+		created = true
+	var error := await add_registry_entry(data, true)
+	if error != "" and created:
+		Fs.remove_dir(library_copy)
+	return error
+
+
 ## Ids of every starter in the starter pack file ([] when it cannot be read).
 func starter_pack_ids() -> PackedStringArray:
 	var ids: PackedStringArray = []

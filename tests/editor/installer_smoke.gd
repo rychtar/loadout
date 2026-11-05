@@ -542,7 +542,15 @@ func _dock_new_addon() -> void:
 	_expect(folder_fixed, "folder fixed to the existing one")
 	await _screenshot("dock_add_existing", _registry_dialog)
 	_select_source(1)
+	# A local source first offers to copy the project's files to the plugin library (not done here: it
+	# would write into the real library folder).
+	var copy_check: CheckBox = _registry_dialog.get("_copy_check")
 	var path_edit: LineEdit = _registry_dialog.get("_path_edit")
+	var library_copy := str(_registry_dialog.call("library_dir")).path_join("fake_a")
+	_expect(copy_check.visible and copy_check.button_pressed and path_edit.text == library_copy and not _registry_dialog.get_ok_button().disabled,
+			"the library copy is offered (%s, path %s)" % [copy_check.button_pressed, path_edit.text])
+	await _screenshot("dock_add_library", _registry_dialog)
+	copy_check.button_pressed = false
 	path_edit.text = _fixture("1.0.0")
 	path_edit.text_changed.emit(path_edit.text)
 	_expect(folder_edit.text == "fake_a", "local path does not rename the folder")

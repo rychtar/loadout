@@ -407,6 +407,8 @@ func _build() -> void:
 	_registry_dialog.store_search = store_search
 	_registry_dialog.entry_submitted.connect(func(data: Dictionary, take_over: bool) -> void:
 		_run(func() -> String: return await manager.add_registry_entry(data, take_over), "Adding %s to the registry" % str(data.get("id", ""))))
+	_registry_dialog.library_entry_submitted.connect(func(data: Dictionary, project_folder: String) -> void:
+		_run(func() -> String: return await manager.add_to_library(data, project_folder), "Copying %s to the plugin library" % project_folder))
 	_registry_dialog.entry_edited.connect(func(id: String, data: Dictionary) -> void:
 		_run(func() -> String: return await manager.update_registry_entry(id, data), "Saving %s" % _display_name(id)))
 	base.add_child(_registry_dialog)

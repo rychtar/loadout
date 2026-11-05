@@ -166,6 +166,12 @@ func _register_settings() -> void:
 		settings.set_setting(Dock.SHOW_STARTERS_SETTING, true)
 	settings.set_initial_value(Dock.SHOW_STARTERS_SETTING, true, false)
 	settings.add_property_info({ "name": Dock.SHOW_STARTERS_SETTING, "type": TYPE_BOOL })
+	# Where "Add to registry…" copies a project's plugin for "copy to my plugin library".
+	var library_setting: String = Dock.RegistryDialog.LIBRARY_SETTING
+	if not settings.has_setting(library_setting):
+		settings.set_setting(library_setting, Dock.RegistryDialog.default_library_dir())
+	settings.set_initial_value(library_setting, Dock.RegistryDialog.default_library_dir(), false)
+	settings.add_property_info({ "name": library_setting, "type": TYPE_STRING, "hint": PROPERTY_HINT_GLOBAL_DIR })
 	# The starters already offered; clear it to be offered the starter pack again.
 	if not settings.has_setting(Dock.STARTERS_SEEN_SETTING):
 		settings.set_setting(Dock.STARTERS_SEEN_SETTING, PackedStringArray())
