@@ -1,6 +1,7 @@
 @tool
 extends RefCounted
 
+const Fs := preload("fs.gd")
 const Package := preload("package.gd")
 
 ## Extracts one plugin folder (the one with plugin.cfg, or with a .gdextension when no plugin has a
@@ -21,6 +22,10 @@ const _CENTRAL_RECORD_SIZE := 46
 const _MAX_COMMENT := 65535
 ## A size field with this value means the real size is in a ZIP64 record (an entry of 4 GB or more).
 const _ZIP64_SIZE := 0xFFFFFFFF
+## "Made by" host of an entry whose external attributes are Unix file modes, and the symlink mode.
+const _HOST_UNIX := 3
+const _MODE_TYPE_MASK := 0xF000
+const _MODE_SYMLINK := 0xA000
 
 
 ## Returns { "ok": bool, "error": String, "source_folder": String }. dest_dir receives the plugin
@@ -46,13 +51,29 @@ static func extract_plugin(zip_path: String, folder: String, dest_dir: String, m
 	if wanted.size() > MAX_FILES:
 		reader.close()
 		return { "ok": false, "error": "The package has too many files (%d)." % wanted.size() }
-	var declared := declared_sizes(zip_path)
+	var central := central_directory(zip_path)
 	var declared_total := 0
 	for path in wanted:
-		declared_total += declared.get(path, 0)
+		declared_total += int(central.get(path, {}).get("size", 0))
 	if declared_total > max_bytes:
 		reader.close()
 		return { "ok": false, "error": _too_large(max_bytes) }
+	# Symlinks (a macOS framework's Versions/Current) are made again when they stay inside the plugin;
+	# one that points out of it, or a file written through one, refuses the package.
+	var links := {}
+	for path in wanted:
+		if central.get(path, {}).get("link", false):
+			var relative := path.trim_prefix(root)
+			var link_target := reader.read_file(path).get_string_from_utf8()
+			if not Fs.link_stays_inside(relative, link_target):
+				reader.close()
+				return { "ok": false, "error": "The zip contains a link that points out of the plugin: %s -> %s" % [path, link_target] }
+			links[relative] = link_target
+	for path in wanted:
+		for link: String in links:
+			if path.trim_prefix(root).begins_with(link + "/"):
+				reader.close()
+				return { "ok": false, "error": "The zip writes through a link: %s" % path }
 	var unpacked := 0
 	var err := DirAccess.make_dir_recursive_absolute(dest_dir)
 	for path in wanted:
@@ -60,6 +81,8 @@ static func extract_plugin(zip_path: String, folder: String, dest_dir: String, m
 			break
 		var target := dest_dir.path_join(path.trim_prefix(root))
 		err = DirAccess.make_dir_recursive_absolute(target.get_base_dir())
+		if err == OK and links.has(path.trim_prefix(root)) and _make_link(links[path.trim_prefix(root)], target):
+			continue
 		if err == OK:
 			var file := FileAccess.open(target, FileAccess.WRITE)
 			if file == null:
@@ -83,6 +106,24 @@ static func extract_plugin(zip_path: String, folder: String, dest_dir: String, m
 ## read (the bytes unpacked are still counted). A ZIP64 entry counts as larger than any limit.
 static func declared_sizes(zip_path: String) -> Dictionary:
 	var sizes := {}
+	var central := central_directory(zip_path)
+	for entry_name: String in central:
+		sizes[entry_name] = central[entry_name]["size"]
+	return sizes
+
+
+## A symlink at path pointing to target. False when the system cannot make one (Windows without the
+## right), then the link's text is written as a file, as before: it is a macOS part that is not loaded there.
+static func _make_link(target: String, path: String) -> bool:
+	var global := ProjectSettings.globalize_path(path)
+	var dir := DirAccess.open(global.get_base_dir())
+	return dir != null and dir.create_link(target, global) == OK
+
+
+## What the zip's central directory says about each entry: { name: { "size": unpacked bytes,
+## "link": a Unix symlink } }; {} when it cannot be read.
+static func central_directory(zip_path: String) -> Dictionary:
+	var sizes := {}
 	var file := FileAccess.open(zip_path, FileAccess.READ)
 	if file == null or file.get_length() < _END_RECORD_SIZE:
 		return sizes
@@ -105,11 +146,16 @@ static func declared_sizes(zip_path: String) -> Dictionary:
 	for i in count:
 		if at + _CENTRAL_RECORD_SIZE > directory.size() or directory.decode_u32(at) != _CENTRAL_RECORD:
 			return {}
+		var host := directory.decode_u8(at + 5)
 		var size := directory.decode_u32(at + 24)
 		var name_length := directory.decode_u16(at + 28)
 		var skip := name_length + directory.decode_u16(at + 30) + directory.decode_u16(at + 32)
+		var mode := directory.decode_u32(at + 38) >> 16
 		var entry_name := directory.slice(at + _CENTRAL_RECORD_SIZE, at + _CENTRAL_RECORD_SIZE + name_length).get_string_from_utf8()
-		sizes[entry_name] = MAX_UNPACKED_BYTES + 1 if size == _ZIP64_SIZE else size
+		sizes[entry_name] = {
+			"size": MAX_UNPACKED_BYTES + 1 if size == _ZIP64_SIZE else size,
+			"link": host == _HOST_UNIX and (mode & _MODE_TYPE_MASK) == _MODE_SYMLINK,
+		}
 		at += _CENTRAL_RECORD_SIZE + skip
 	return sizes
 

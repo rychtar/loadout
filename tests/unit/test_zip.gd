@@ -146,3 +146,37 @@ func test_plugin_cfg_wins_over_an_extension_elsewhere() -> void:
 	check(result["ok"], "ok: %s" % result["error"])
 	check(FileAccess.file_exists(dir.path_join("out/plugin.cfg")), "the plugin is extracted")
 	check(not FileAccess.file_exists(dir.path_join("out/other.gdextension")), "not the unrelated extension")
+
+
+const ZIPS := "res://tests/fixtures/zips"
+
+
+func _is_link(path: String) -> bool:
+	var dir := DirAccess.open(ProjectSettings.globalize_path(path.get_base_dir()))
+	return dir != null and dir.is_link(path.get_file())
+
+
+func test_framework_links_are_kept() -> void:
+	if OS.get_name() == "Windows":
+		return # making symlinks needs a right Windows does not give by default
+	var dest := temp_dir("zip_links").path_join("out")
+	var result := Zip.extract_plugin(ProjectSettings.globalize_path(ZIPS.path_join("framework_links.zip")), "fake_link", dest)
+	check(result["ok"], "extracted: %s" % result.get("error", ""))
+	var framework := dest.path_join("bin/libfake.framework")
+	check(_is_link(framework.path_join("Versions/Current")), "Versions/Current is a link again")
+	check(_is_link(framework.path_join("libfake")) and _is_link(framework.path_join("Resources")), "and so are the top-level links")
+	check_eq(FileAccess.get_file_as_string(framework.path_join("libfake")), "fake binary", "the library is reached through them")
+	check_eq(DirAccess.open(ProjectSettings.globalize_path(framework.path_join("Versions"))).read_link("Current"), "A", "with the zip's target")
+
+
+func test_link_out_of_the_plugin_is_refused() -> void:
+	var dest := temp_dir("zip_link_escape").path_join("out")
+	var result := Zip.extract_plugin(ProjectSettings.globalize_path(ZIPS.path_join("link_escape.zip")), "bad", dest)
+	check(not result["ok"] and str(result["error"]).contains("points out"), "refused: %s" % result.get("error", ""))
+	check(not DirAccess.dir_exists_absolute(dest), "nothing unpacked")
+
+
+func test_writing_through_a_link_is_refused() -> void:
+	var dest := temp_dir("zip_link_through").path_join("out")
+	var result := Zip.extract_plugin(ProjectSettings.globalize_path(ZIPS.path_join("link_write_through.zip")), "bad", dest)
+	check(not result["ok"] and str(result["error"]).contains("through a link"), "refused: %s" % result.get("error", ""))

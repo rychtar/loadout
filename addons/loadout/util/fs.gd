@@ -19,9 +19,14 @@ static var _hash_cache: Dictionary[String, Array] = {}
 
 
 ## Recursively copies the contents of src into dst (dst is created if missing).
-## Files and folders whose name is in exclude are skipped at any depth. Symlinked sub folders are
-## skipped (they could point outside the plugin or loop); src itself may be a symlink.
+## Files and folders whose name is in exclude are skipped at any depth. A symlink that points to a
+## place inside src (a macOS framework's Versions/Current) is copied as a symlink; one that points out
+## is followed for a file and skipped for a folder (it could loop); src itself may be a symlink.
 static func copy_dir(src: String, dst: String, exclude: PackedStringArray = []) -> Error:
+	return _copy_dir(src, dst, exclude, "")
+
+
+static func _copy_dir(src: String, dst: String, exclude: PackedStringArray, relative: String) -> Error:
 	var dir := _open(src)
 	if dir == null:
 		return DirAccess.get_open_error()
@@ -31,16 +36,54 @@ static func copy_dir(src: String, dst: String, exclude: PackedStringArray = []) 
 	for file_name: String in dir.get_files():
 		if exclude.has(file_name):
 			continue
+		if dir.is_link(file_name) and _copy_link(dir, file_name, relative.path_join(file_name), dst.path_join(file_name)):
+			continue
 		err = DirAccess.copy_absolute(src.path_join(file_name), dst.path_join(file_name))
 		if err != OK:
 			return err
 	for sub_dir: String in dir.get_directories():
-		if exclude.has(sub_dir) or dir.is_link(sub_dir):
+		if exclude.has(sub_dir):
 			continue
-		err = copy_dir(src.path_join(sub_dir), dst.path_join(sub_dir), exclude)
+		if dir.is_link(sub_dir):
+			_copy_link(dir, sub_dir, relative.path_join(sub_dir), dst.path_join(sub_dir))
+			continue
+		err = _copy_dir(src.path_join(sub_dir), dst.path_join(sub_dir), exclude, relative.path_join(sub_dir))
 		if err != OK:
 			return err
 	return OK
+
+
+## Makes the symlink name of dir again at dst_path when it points inside the copied folder (relative
+## is its path there). False when it does not, or the system cannot make links (Windows without the right).
+static func _copy_link(dir: DirAccess, name: String, relative: String, dst_path: String) -> bool:
+	var target := dir.read_link(name)
+	if not link_stays_inside(relative, target):
+		return false
+	var global := ProjectSettings.globalize_path(dst_path)
+	var dst_dir := DirAccess.open(global.get_base_dir())
+	if dst_dir == null:
+		return false
+	if dst_dir.is_link(global.get_file()) and dst_dir.read_link(global.get_file()) == target:
+		return true
+	return dst_dir.create_link(target, global) == OK
+
+
+## Whether a symlink at relative (its path inside a folder) whose text is target points into that
+## folder: "A" or "Versions/Current/lib" do, "/etc", "C:/x" and "../../x" do not.
+static func link_stays_inside(relative: String, target: String) -> bool:
+	if target == "" or target.is_absolute_path() or target.contains(":") or target.contains("\\"):
+		return false
+	var parts := PackedStringArray()
+	for part in (relative.get_base_dir() + "/" + target).split("/", false):
+		if part == ".":
+			continue
+		if part == "..":
+			if parts.is_empty():
+				return false
+			parts.remove_at(parts.size() - 1)
+		else:
+			parts.append(part)
+	return not parts.is_empty()
 
 
 ## Recursively deletes path. A missing path is not an error. A symlink is only unlinked, what it
