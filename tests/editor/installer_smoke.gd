@@ -151,6 +151,9 @@ func _run_dock() -> void:
 	_registry_dialog = _dock.get("_registry_dialog")
 	_registry_path = _cmdline_value("--loadout-registry=")
 	_original_registry = FileAccess.get_file_as_string(_registry_path)
+	var editor_dock: EditorDock = _plugin.get("_editor_dock")
+	_expect(editor_dock != null and _dock.get_parent() == editor_dock, "the dock content sits in an EditorDock")
+	_expect(editor_dock != null and editor_dock.dock_icon != null and editor_dock.dock_icon.get_width() >= 16, "the dock has its icon")
 	_show_dock(_dock)
 	if not await _dock_install():
 		return

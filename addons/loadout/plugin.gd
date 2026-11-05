@@ -20,11 +20,21 @@ const SMOKE_ARG_PREFIX := "--loadout-smoke="
 const SMOKE_SCRIPT := "res://tests/editor/installer_smoke.gd"
 ## Smoke modes that drive the installer themselves and must not see the startup sync.
 const SMOKE_INSTALLER_MODES: PackedStringArray = ["install", "update", "verify", "remove"]
+## Dock tab icon: three plugin slots, the top one being loaded. FONT and ACCENT become the editor
+## theme's colors; it is drawn at the editor scale, so it stays sharp.
+const DOCK_ICON_SVG := """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+<rect x="1.5" y="1.5" width="13" height="3.5" rx="1" fill="#ACCENT"/>
+<rect x="1.5" y="6.25" width="13" height="3.5" rx="1" fill="#FONT" fill-opacity=".8"/>
+<rect x="1.5" y="11" width="13" height="3.5" rx="1" fill="#FONT" fill-opacity=".8"/>
+</svg>"""
+
 ## How often the startup waits check whether the editor's first scan is over.
 const STARTUP_POLL_S := 0.5
 
 var _manager: LoadoutManager
+## The dock's content; _editor_dock is the editor's dock around it (title, icon, place).
 var _dock: Control
+var _editor_dock: EditorDock
 ## Polls in a row that found the filesystem idle (the startup sync waits for two).
 var _idle_polls := 0
 
@@ -46,7 +56,15 @@ func _enter_tree() -> void:
 	_dock.manager = _manager
 	_dock.store_search = func(query: String) -> Dictionary:
 		return await LoadoutStoreSource.search(http, query, godot_version)
-	add_control_to_dock(DOCK_SLOT_RIGHT_UL, _dock)
+	_editor_dock = EditorDock.new()
+	_editor_dock.name = "Loadout"
+	_editor_dock.title = "Loadout"
+	# The same key the old add_control_to_dock() layout used (the control's name), so the dock stays put.
+	_editor_dock.layout_key = "Loadout"
+	_editor_dock.default_slot = EditorDock.DOCK_SLOT_RIGHT_UL
+	_editor_dock.dock_icon = _dock_icon()
+	_editor_dock.add_child(_dock)
+	add_dock(_editor_dock)
 
 	var smoke_mode := _cmdline_value(SMOKE_ARG_PREFIX)
 	if smoke_mode == "" or not SMOKE_INSTALLER_MODES.has(smoke_mode):
@@ -59,10 +77,22 @@ func _exit_tree() -> void:
 	var filesystem := EditorInterface.get_resource_filesystem()
 	if filesystem.filesystem_changed.is_connected(_on_filesystem_changed):
 		filesystem.filesystem_changed.disconnect(_on_filesystem_changed)
-	remove_control_from_docks(_dock)
-	_dock.queue_free()
+	remove_dock(_editor_dock)
+	_editor_dock.queue_free()
+	_editor_dock = null
 	_dock = null
 	_manager = null
+
+
+func _dock_icon() -> Texture2D:
+	var theme := EditorInterface.get_editor_theme()
+	var font := theme.get_color("font_color", "Editor") if theme.has_color("font_color", "Editor") else Color("e0e0e0")
+	var accent := theme.get_color("accent_color", "Editor") if theme.has_color("accent_color", "Editor") else Color("70bafa")
+	var image := Image.new()
+	var svg := DOCK_ICON_SVG.replace("#FONT", "#" + font.to_html(false)).replace("#ACCENT", "#" + accent.to_html(false))
+	if image.load_svg_from_string(svg, EditorInterface.get_editor_scale()) != OK:
+		return null
+	return ImageTexture.create_from_image(image)
 
 
 func get_manager() -> LoadoutManager:
