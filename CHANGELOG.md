@@ -6,11 +6,15 @@
 
 - **GDExtensions**: add-ons that ship a `.gdextension` file, with or without a `plugin.cfg` (for example Orchestrator), can be installed, updated, restored and removed. A new one is copied and Godot loads it right after (no restart). An update or a removal backs up and replaces or deletes the files and offers an editor restart, because the editor cannot swap a library it has loaded. The version is taken from the lock when there is no `plugin.cfg`. When the add-on also has a `plugin.cfg`, its editor plugin is enabled once Godot has loaded the library (with the next editor start when an older copy of the library is still loaded). Add-ons like this that are already in the project are listed for "Add to registry…" too.
 - **Right-click** a plugin in the dock for all its actions, **double-click** (or Enter) to install or update it. A double-click also confirms a row in the version, backup and Asset Store search lists.
+- **Copy to my plugin library**: "Add to registry…" for a plugin that is already in a project can copy its folder into a library folder (Editor Settings → Loadout → Library Path) and register that copy as a local source, so every other project gets the plugin from there.
+- A **local folder with a GDExtension and no `plugin.cfg`** can be a source: the registry entry carries the version of its files (`"version"` in the local source), the Add dialog asks for it.
 - **Show in FileSystem** for an installed plugin, and links to the plugin's page and the release notes of the version Loadout would install.
 - Releases numbered the way Godot does it are understood: `v2.5.stable` is 2.5.0, `v2.5.1.rc2` is a release candidate of 2.5.1, `v2.6.dev2` a snapshot of 2.6.0. They are offered as pre-releases only with the opt-in, as before.
 
 ### Changed
 
+- The dock is an `EditorDock` with its own title and icon (shown where the editor shows dock icons, for example in Editor → Editor Docks); it keeps its place in the layout.
+- Symlinks inside a package, such as a macOS framework's `Versions/Current`, are unpacked and copied as symlinks instead of text files and missing folders. A link that points out of the package, or a file written through one, refuses the package.
 - A release with both a `-demo-` zip and a plugin zip downloads the plugin zip.
 - The dock header counts the plugins per state ("Up to date 3 · Update 1") and its tooltip, like the check button's, says when the sources last answered. The line saying what runs sits under the header and names the action ("Update · Gut…").
 - **Remove from project…** and **Remove from registry…** are in a **Remove** menu at the end of the actions, apart from the ones that cannot lose anything.
@@ -27,7 +31,7 @@
 - The **Install** button of a plugin with no installable version stays disabled after another action.
 - On Windows, an editor that reads the shared registry exactly while another editor saves it reads the new content instead of an empty registry.
 - The startup offer and the update check no longer get lost when an extension in the project does not load at startup (no library for this system, for example): the editor's first scan then reloads every script, which cancelled them.
-- A tag ending in `-stable` (Terrain3D's `v1.1.0-stable`) is the release 1.1.0, not a prerelease that a range like `^1.0.0` left out. A source checked within the last day shows the right version after its next check.
+- A tag ending in `-stable` (Terrain3D's `v1.1.0-stable`) is the release 1.1.0, not a prerelease that a range like `^1.0.0` left out. Sources whose releases were cached the old way are checked again at the next refresh.
 - An install that starts while the dock is still refreshing (right after the editor starts, for example) no longer fails with "Source type … is not supported" or "Release … is unknown".
 - The dock hint ("Select a plugin in the list.") shows again after a plugin without a message was selected.
 - A package whose zip declares more than 512 MB of content is refused before anything is unpacked, not after Loadout already unpacked a huge file into memory.
