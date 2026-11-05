@@ -145,6 +145,9 @@ func test_godot_style_suffixes() -> void:
 	check_eq(_str("3.0.beta"), "3.0.0-beta", "stage without a number")
 	check_eq(_str("1.0.alpha3"), "1.0.0-alpha.3", "alpha")
 	check(Version.parse("2.5.stable").precision == 2, "precision is kept")
+	check_eq(_str("v1.1.0-stable"), "1.1.0", "-stable is the release too (Terrain3D tags)")
+	check_eq(_str("1.1.0-rc1"), "1.1.0-rc1", "other words after a dash stay semver prereleases")
+	check(Version.parse("2.5-stables").is_prerelease(), "only the whole word stable is the release")
 
 
 func test_godot_style_suffixes_order() -> void:
@@ -159,6 +162,8 @@ func test_godot_style_suffixes_in_ranges() -> void:
 	check(not Version.satisfies("v2.6.dev2", "^2.0.0"), "dev snapshot needs the opt-in")
 	check(Version.satisfies("v2.6.dev2", "^2.0.0", true), "dev snapshot with prereleases")
 	check(not Version.satisfies("v2.5.1.rc2", "^2.0.0"), "release candidate needs the opt-in")
+	check(Version.satisfies("v1.1.0-stable", "^1.0.0"), "-stable is in a caret range without the opt-in")
+	check(not Version.satisfies("v1.1.0-rc1", "^1.0.0"), "-rc1 still needs it")
 	check_eq(Version.max_satisfying(PackedStringArray(["2.4.4.stable", "2.5.stable", "2.6.dev1"]), "^2.0.0"), "2.5.stable", "newest stable")
 
 

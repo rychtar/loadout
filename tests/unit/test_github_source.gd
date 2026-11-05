@@ -222,6 +222,15 @@ func test_info_without_description_or_license() -> void:
 	check(info["ok"] and info["summary"] == "" and info["license"] == "", "empty, not 'null' or NOASSERTION")
 
 
+func test_dash_stable_tags_are_releases() -> void:
+	_setup()
+	http.respond_json(RELEASES_URL, [_release("v1.1.0-stable"), _release("v1.1.0-rc1", { "prerelease": true }), _release("v1.0.2-stable")])
+	source.releases.assign((await _list())["releases"])
+	check_eq(source.releases[0]["version"], "1.1.0", "the version without -stable")
+	check(not source.releases[0]["prerelease"], "not a prerelease")
+	check_eq((await source.get_latest_version("^1.0.0"))["version"], "1.1.0", "the newest release in ^1.0.0")
+
+
 func test_godot_style_tags() -> void:
 	_setup()
 	http.respond_json(RELEASES_URL, [

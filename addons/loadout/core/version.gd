@@ -6,6 +6,8 @@ extends RefCounted
 ## Accepted versions are lenient: optional leading "v", missing minor/patch default to 0.
 ## Godot-style stages after a dot are read too: "2.5.stable" is 2.5.0, "2.5.1.rc2" is 2.5.1-rc.2,
 ## "2.6.dev2" is 2.6.0-dev.2 (numbers in a stage compare as numbers, so rc10 is above rc2).
+## "-stable" names the release too ("1.1.0-stable" is 1.1.0, Terrain3D tags so); other words after
+## a "-" stay semver prereleases.
 ## Ranges: "" or "*" (any), "1.2.3" (exact), "1.2" (1.2.x), "^1.2.3", "~1.2.3".
 ## Prereleases only match a range whose own version is a prerelease of the same major.minor.patch,
 ## unless include_prereleases is set (then they match like any version below the range's upper bound).
@@ -16,9 +18,9 @@ const _VERSION_PATTERN := "^[vV]?(0|[1-9]\\d*)(?:\\.(0|[1-9]\\d*))?(?:\\.(0|[1-9
 ## Longer numbers would overflow an int.
 const MAX_DIGITS := 9
 
-## "<numbers>.stable" or "<numbers>.<dev|alpha|beta|rc><n>": groups are the numbers (with an optional
-## leading v), the stage word and its number.
-const _STAGE_PATTERN := "^([vV]?\\d+(?:\\.\\d+){0,2})\\.(?:(stable)|(dev|alpha|beta|rc)(\\d*))$"
+## "<numbers>.stable", "<numbers>-stable" or "<numbers>.<dev|alpha|beta|rc><n>": groups are the numbers
+## (with an optional leading v), the stage word and its number.
+const _STAGE_PATTERN := "^([vV]?\\d+(?:\\.\\d+){0,2})(?:[.-](stable)|\\.(dev|alpha|beta|rc)(\\d*))$"
 
 static var _regex: RegEx
 static var _stage_regex: RegEx
@@ -60,7 +62,7 @@ static func parse(text: String) -> LoadoutVersion:
 	return version
 
 
-## "2.5.1.rc2" as "2.5.1-rc.2" and "2.5.stable" as "2.5"; any other text is returned unchanged.
+## "2.5.1.rc2" as "2.5.1-rc.2", "2.5.stable" and "2.5-stable" as "2.5"; any other text is returned unchanged.
 static func _without_godot_stage(text: String) -> String:
 	var staged := _stage_regex.search(text)
 	if staged == null:
