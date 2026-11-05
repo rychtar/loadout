@@ -49,9 +49,11 @@ actions, double-click it to install or update it. Drag a column border in the pl
 double-click it to fit the column to its text; drag the border above the detail to share the height.
 
 - **Add a plugin**: **+** searches the Asset Store, takes a GitHub repository (`owner/name`) or a
-  local folder with `plugin.cfg`. Allowed versions: `*` (newest), `^1.2.0` (minor and patch
-  updates) or `~1.2.0` (patch updates only). Plugins that appear in `addons/` by other means are
-  offered for the registry too.
+  local folder with `plugin.cfg` (or with a `.gdextension`; you then enter the version of its files).
+  Allowed versions: `*` (newest), `^1.2.0` (minor and patch updates) or `~1.2.0` (patch updates
+  only). Plugins that appear in `addons/` by other means are offered for the registry too; with a
+  local source, **Add to registry…** can copy such a plugin into your plugin library (Editor
+  Settings → Loadout → Library Path) and register that copy.
 - **Starter plugins…** (in **⋮**): the install dialog with two lists. On the left are the plugins
   this project lacks from your registry and the **Starter pack** (tagged), a short list of plugins
   that suit most projects. Move what you want to the right (button or double-click), **Install
