@@ -67,6 +67,23 @@ func test_cache_survives_restart() -> void:
 	check_eq(other.releases.size(), 1, "cached release")
 
 
+func test_releases_read_the_old_way_are_checked_again_without_the_etag() -> void:
+	_setup("old_format")
+	var old_entry := { "checked_at": now - 60, "updated_at": now - 60, "etag": "W/\"old\"", "last_error": "",
+			"releases": [{ "version": "1.1.0-stable", "tag": "v1.1.0-stable", "prerelease": true }] }
+	write_text(cache_path, JSON.stringify({ "schema": 1, "sources": { source.cache_key(): old_entry } }))
+	checker = _new_checker()
+	check(checker.is_due(source.cache_key()), "an entry from before the current format is due at once")
+	source.etag = "W/\"new\""
+	await checker.load_releases(source)
+	check_eq(source.list_calls, 1, "the source is asked")
+	check_eq(source.last_etag, "", "without the old ETag, so the answer is not a 304")
+	check_eq(_versions(), PackedStringArray(["1.0.0"]), "the releases as read now")
+	check_eq(checker.save_cache(), OK, "saved")
+	checker = _new_checker()
+	check(not checker.is_due(source.cache_key()), "the new entry is not due again")
+
+
 func test_check_again_after_a_day() -> void:
 	_setup("next_day")
 	await checker.load_releases(source)
@@ -142,3 +159,16 @@ func test_in_memory_checker() -> void:
 	memory.load_cache()
 	await memory.load_releases(source)
 	check_eq(memory.save_cache(), OK, "no file, no error")
+
+
+func test_last_answer_is_the_newest_successful_check() -> void:
+	_setup("last_answer")
+	check_eq(checker.last_answer_at(), 0, "no answer yet")
+	await checker.load_releases(source)
+	check_eq(checker.last_answer_at(), now, "the answer time")
+	source.fail_list = "Cannot connect."
+	checker.save_cache()
+	now += DAY
+	checker = _new_checker()
+	await checker.load_releases(source)
+	check_eq(checker.last_answer_at(), now - DAY, "a failed check is not an answer")

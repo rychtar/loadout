@@ -7,6 +7,7 @@ extends RefCounted
 
 const Fs := preload("../util/fs.gd")
 const Log := preload("../util/log.gd")
+const Package := preload("../util/package.gd")
 
 ## Loadout's own folder: it can be updated (installer.self_update + editor restart), never removed.
 const SELF_FOLDER := "loadout"
@@ -20,6 +21,10 @@ const REGISTRY_UNREADABLE := "The registry cannot be read, nothing changed."
 signal states_changed()
 ## An installed or updated plugin left stale class_name entries; offer an editor restart.
 signal restart_recommended()
+## Files of an add-on with native code were put in place and the editor should scan them. Emitted once
+## the whole action is over (scanning a new GDExtension reloads every script, which cancels whatever
+## is still running).
+signal scan_requested()
 ## Loadout replaced its own files; the editor must restart now (the dock does it).
 signal restart_required()
 
@@ -49,10 +54,14 @@ class PluginState:
 	## Version install() would put in place, "" when nothing can be installed.
 	var target_version: String = ""
 	var source_label: String = ""
+	## Web page of the plugin at its source, "" for a local folder.
+	var source_url: String = ""
 	## Why the plugin is in this state, for the dock.
 	var message: String = ""
 	## Source could not be checked, cached data used (shown in the dock, never blocks).
 	var warning: String = ""
+	## The folder in the project holds native code (a GDExtension): replaced on disk, active after a restart.
+	var native: bool = false
 	## Release notes and page of target_version (remote sources only).
 	var release_notes: String = ""
 	var release_url: String = ""
@@ -79,6 +88,15 @@ var _seen_addons: Dictionary[String, bool] = {}
 var loaded := false
 ## True while an install or update runs; other actions are refused meanwhile.
 var busy := false
+var _scan_pending := false
+## Add-ons with native code whose files were replaced or deleted while the editor runs: the old
+## library stays loaded, so putting files back needs a restart, not a scan.
+var _native_changed: Dictionary[String, bool] = {}
+## Native add-ons with a plugin.cfg installed fresh: their EditorPlugin is enabled after the scan
+## (enable_scanned_plugins()).
+var _enable_pending: PackedStringArray = []
+## Installs running as one batch (install_missing()): the scan waits for the last one.
+var _batch_depth := 0
 
 ## Starter pack file (tests use their own).
 var starter_pack_path := LoadoutStarterPack.DEFAULT_PATH
@@ -112,16 +130,19 @@ func _init(plugin_installer: LoadoutInstaller, registry_file: String, lock_file:
 func refresh(check_updates: bool = false) -> void:
 	_load_files()
 	var new_states: Array[PluginState] = []
-	_sources.clear()
+	# Fresh sources (the registry may have changed), swapped in with the states at the end: an action
+	# that runs meanwhile (an install the startup sync overlaps) keeps the sources it started with.
+	var new_sources: Dictionary[String, LoadoutSource] = {}
 	if _registry_ok and _lock_ok:
 		for entry in registry.entries:
-			new_states.append(await _compute_state(entry, check_updates))
+			new_states.append(await _compute_state(entry, new_sources, check_updates))
 		for id in lockfile.plugins:
 			if registry.get_entry(id) == null:
 				new_states.append(_orphan_state(id))
 	checker.save_cache()
 	warnings.append_array(checker.warnings)
 	states = new_states
+	_sources = new_sources
 	unregistered.assign(_scan_unregistered() if _registry_ok else [])
 	for info in unregistered:
 		_seen_addons[info["folder"]] = true
@@ -153,6 +174,11 @@ func update_ids() -> PackedStringArray:
 		if state.status == Status.UPDATE:
 			ids.append(state.id)
 	return ids
+
+
+## Unix time of the newest answer a remote source gave, 0 when none did yet.
+func last_update_check() -> int:
+	return checker.last_answer_at()
 
 
 ## Source of the plugin from the last refresh (null before the first refresh).
@@ -212,6 +238,7 @@ func use_package_folders(folders: Dictionary) -> Dictionary:
 
 func _install_all(ids: PackedStringArray) -> Dictionary:
 	var summary := { "installed": PackedStringArray(), "failed": {}, "folders": {}, "restart_recommended": false }
+	_batch_depth += 1
 	for id in _self_last(ids):
 		var result := await install(id)
 		if result["ok"]:
@@ -223,6 +250,11 @@ func _install_all(ids: PackedStringArray) -> Dictionary:
 			summary["failed"][id] = result["error"]
 			if result.get("fallback_version", "") != "":
 				summary["failed"][id] += " An older version (%s) may work: select the plugin and use Install version…." % result["fallback_version"]
+	_batch_depth -= 1
+	if not ids.is_empty() and _batch_depth == 0:
+		# Each install of the batch skipped its own refresh (every refresh reads all plugin folders).
+		await refresh()
+	_flush_scan()
 	return summary
 
 
@@ -285,7 +317,9 @@ func available_backups(id: String) -> Array[Dictionary]:
 ## and pins that version unless pin is false. Works for a removed plugin too.
 ## Returns the installer result.
 func restore_backup(id: String, backup_path: String, pin: bool = true) -> Dictionary:
-	return await _exclusive(id, func(state: PluginState) -> Dictionary: return await _restore_backup(state, backup_path, pin))
+	var result: Dictionary = await _exclusive(id, func(state: PluginState) -> Dictionary: return await _restore_backup(state, backup_path, pin))
+	_flush_scan()
+	return result
 
 
 ## Which files of the plugin differ from the version Loadout installed (downloads that version again
@@ -315,6 +349,7 @@ func changed_files(id: String) -> Dictionary:
 ## "needs_confirmation" set.
 func install(id: String, force: bool = false, version: String = "", pin: bool = false) -> Dictionary:
 	var result: Dictionary = await _exclusive(id, func(state: PluginState) -> Dictionary: return await _install(state, force, version, pin))
+	_flush_scan()
 	if result.get("needs_confirmation", "") != "":
 		# What the caller needs to repeat the action after the user confirms.
 		result["version"] = version
@@ -421,6 +456,37 @@ func add_registry_entry(data: Dictionary, take_over: bool = false) -> String:
 		_take_over(registry.get_entry(str(data.get("id", ""))))
 	await refresh()
 	return ""
+
+
+## Copies a plugin of the project's addons folder into the plugin library (the entry's local source
+## path) and adds the entry, taking over the project's files, so other projects get it from the copy.
+## An existing library folder is used when it holds the same files, never overwritten. Returns "" or
+## an error message.
+func add_to_library(data: Dictionary, project_folder: String) -> String:
+	var parsed := LoadoutRegistry.parse_entry(data)
+	if not parsed["ok"]:
+		return parsed["error"]
+	var entry: LoadoutRegistry.Entry = parsed["entry"]
+	if entry.source.get("type") != LoadoutRegistry.SOURCE_LOCAL:
+		return "A library copy needs a local folder source."
+	var project_dir := installer.addons_dir.path_join(project_folder)
+	if not Package.is_addon(project_dir):
+		return "addons/%s holds no plugin to copy." % project_folder
+	var library_copy: String = entry.source["path"]
+	var created := false
+	if Fs.has_files(library_copy):
+		if Fs.hash_dir(library_copy) != Fs.hash_dir(project_dir):
+			return "%s already exists with other files. Remove it or set another library folder (Editor Settings → Loadout → Library Path)." % library_copy
+	else:
+		var err := Fs.copy_dir(project_dir, library_copy, Fs.DEFAULT_EXCLUDE)
+		if err != OK:
+			Fs.remove_dir(library_copy)
+			return "Copying addons/%s to %s failed: %s" % [project_folder, library_copy, error_string(err)]
+		created = true
+	var error := await add_registry_entry(data, true)
+	if error != "" and created:
+		Fs.remove_dir(library_copy)
+	return error
 
 
 ## Ids of every starter in the starter pack file ([] when it cannot be read).
@@ -615,21 +681,24 @@ func _load_files() -> void:
 	warnings.append_array(lockfile.warnings)
 
 
-func _compute_state(entry: LoadoutRegistry.Entry, check_updates: bool = false) -> PluginState:
+## sources: the source of every plugin by id; an entry's source is created and added when missing.
+func _compute_state(entry: LoadoutRegistry.Entry, sources: Dictionary[String, LoadoutSource], check_updates: bool = false) -> PluginState:
 	var state := PluginState.new()
 	state.id = entry.id
 	state.entry = entry
 	state.lock_entry = lockfile.get_entry(entry.id)
 	state.installed_version = installer.installed_version(entry)
-	var source: LoadoutSource = _sources.get(entry.id)
+	state.native = installer.is_installed(entry) and Package.is_native(installer.target_dir(entry))
+	var source: LoadoutSource = sources.get(entry.id)
 	if source == null:
 		source = _source_factory.call(entry)
 	var source_error := ""
 	if source == null:
 		source_error = "Source type %s is not supported." % entry.source.get("type")
 	else:
-		_sources[entry.id] = source
+		sources[entry.id] = source
 		state.source_label = source.describe()
+		state.source_url = source.page_url()
 		var loaded: Dictionary = await checker.load_releases(source, check_updates)
 		state.warning = loaded["warning"]
 		if not loaded["ok"]:
@@ -728,12 +797,14 @@ func _install(state: PluginState, force: bool, version: String, pin: bool) -> Di
 			lockfile.set_pinned(state.id, pin)
 		lockfile.set_ignored(state.id, false)
 		_save_lock()
+		_note_native_result(state.id, result)
 		if result["restart_recommended"]:
 			restart_recommended.emit()
 	elif result.get("load_failed", false):
 		# The plugin does not run here: the newest release may need another Godot than the older ones.
 		result["fallback_version"] = _older_version(state.id, target)
-	await refresh()
+	if _batch_depth == 0:
+		await refresh()
 	return result
 
 
@@ -769,6 +840,7 @@ func _restore_backup(state: PluginState, backup_path: String, pin: bool) -> Dict
 		lockfile.set_pinned(state.id, pin)
 		lockfile.set_ignored(state.id, false)
 		_save_lock()
+		_note_native_result(state.id, result)
 		if result["restart_recommended"]:
 			restart_recommended.emit()
 	await refresh()
@@ -792,11 +864,14 @@ func _describe_diff(state: PluginState, version: String, diff: Dictionary) -> St
 func _uninstall(state: PluginState) -> Dictionary:
 	if state.entry.folder == SELF_FOLDER:
 		return _error_result(state.id, "Loadout cannot remove itself. Disable it in Project Settings → Plugins and delete its folder by hand.")
-	var result: Dictionary = await installer.uninstall(state.entry)
+	var result: Dictionary = await installer.uninstall(state.entry, state.lock_entry)
 	if result["ok"]:
 		lockfile.remove(state.id)
 		lockfile.set_ignored(state.id, true)
 		_save_lock()
+		_note_native_result(state.id, result)
+		if result["restart_recommended"]:
+			restart_recommended.emit()
 	await refresh()
 	return result
 
@@ -815,6 +890,52 @@ func _self_update(state: PluginState, source: LoadoutSource, force: bool, versio
 		_save_lock()
 		restart_required.emit()
 	return result
+
+
+## Decides between a scan and a restart for a native install, and remembers what the editor holds.
+## A fresh copy is scanned (Godot loads it), unless an earlier library of the same add-on is still
+## loaded from before it was replaced or removed: then only a restart gets the new files running.
+func _note_native_result(id: String, result: Dictionary) -> void:
+	if not result.get("native", false):
+		return
+	var scan: bool = result.get("scan_wanted", false)
+	if scan and _native_changed.has(id):
+		scan = false
+		result["restart_recommended"] = true
+	if result["restart_recommended"]:
+		_native_changed[id] = true
+	result["scan_wanted"] = scan
+	_scan_pending = _scan_pending or scan
+	if result.get("enable_after_scan", false):
+		var state := get_state(id)
+		if scan:
+			if not _enable_pending.has(id):
+				_enable_pending.append(id)
+		elif state != null and state.entry != null:
+			installer.enable_on_restart(state.entry)
+
+
+## Enables the EditorPlugin of every native add-on that waited for the scan scan_requested asked for.
+## The dock calls it once the scan is over. Returns the problems, one per plugin that did not start.
+func enable_scanned_plugins() -> PackedStringArray:
+	var problems: PackedStringArray = []
+	var ids := _enable_pending.duplicate()
+	_enable_pending.clear()
+	for id in ids:
+		var state := get_state(id)
+		if state == null or state.entry == null:
+			continue
+		var problem: String = await installer.enable_after_scan(state.entry)
+		if problem != "":
+			problems.append(problem)
+	return problems
+
+
+## Asks for the scan once no batch is running.
+func _flush_scan() -> void:
+	if _scan_pending and _batch_depth == 0:
+		_scan_pending = false
+		scan_requested.emit()
 
 
 ## Runs an action on one plugin that changes the project. `busy` is set before the first await, so
@@ -848,9 +969,12 @@ func _scan_unregistered() -> Array[Dictionary]:
 	for folder in DirAccess.get_directories_at(installer.addons_dir):
 		if folder == SELF_FOLDER or known.has(folder.to_lower()):
 			continue
-		var cfg := ConfigFile.new()
-		if cfg.load(installer.addons_dir.path_join(folder).path_join("plugin.cfg")) != OK:
+		var dir := installer.addons_dir.path_join(folder)
+		if not Package.is_addon(dir):
 			continue
+		# An extension has no plugin.cfg: the missing file leaves the defaults (folder name, no version).
+		var cfg := ConfigFile.new()
+		cfg.load(dir.path_join("plugin.cfg"))
 		found.append({
 			"folder": folder,
 			"name": str(cfg.get_value("plugin", "name", folder)),
@@ -962,7 +1086,7 @@ func _save_and_update(id: String) -> Error:
 	var err := _save_lock()
 	var state := get_state(id)
 	if state != null and state.entry != null:
-		var fresh := await _compute_state(state.entry)
+		var fresh := await _compute_state(state.entry, _sources)
 		# A refresh may have replaced the list while the state was computed.
 		var index := states.find(state)
 		if index >= 0:

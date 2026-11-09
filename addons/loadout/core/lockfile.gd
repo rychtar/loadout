@@ -34,6 +34,10 @@ var plugins: Dictionary[String, Entry] = {}
 var ignored: PackedStringArray = []
 ## Top-level fields this version does not know, kept when saving.
 var extra: Dictionary = {}
+## Raw entries ({ id: value }) and "ignored" values that did not parse. They are written back
+## unchanged, so saving here never drops what another Loadout version can read.
+var skipped: Dictionary = {}
+var skipped_ignored: Array = []
 ## Problems found while parsing, for the dock.
 var warnings: PackedStringArray = []
 
@@ -59,12 +63,14 @@ static func from_dict(data: Variant) -> Dictionary:
 		if parsed["ok"]:
 			lock.plugins[str(id)] = parsed["entry"]
 		else:
-			lock.warnings.append(parsed["error"])
+			lock.warnings.append(parsed["error"] + " It stays in the file unchanged.")
+			lock.skipped[str(id)] = raw_plugins[id]
 	for id: Variant in raw_ignored:
 		if typeof(id) == TYPE_STRING:
 			lock.set_ignored(id, true)
 		else:
-			lock.warnings.append("Invalid id in \"ignored\": %s." % var_to_str(id))
+			lock.warnings.append("Invalid id in \"ignored\": %s. It stays in the file unchanged." % var_to_str(id))
+			lock.skipped_ignored.append(id)
 	return { "ok": true, "error": "", "lockfile": lock }
 
 
@@ -83,13 +89,15 @@ func save_file(path: String = DEFAULT_PATH) -> Error:
 
 
 func to_dict() -> Dictionary:
-	var raw_plugins := {}
+	var raw_plugins := skipped.duplicate(true)
 	for id in plugins:
 		raw_plugins[id] = plugins[id].to_dict()
 	var sorted_ignored := ignored.duplicate()
 	sorted_ignored.sort()
 	var data := extra.duplicate(true)
-	data.merge({ "schema": SCHEMA, "plugins": raw_plugins, "ignored": Array(sorted_ignored) }, true)
+	var raw_ignored := Array(sorted_ignored)
+	raw_ignored.append_array(skipped_ignored.duplicate(true))
+	data.merge({ "schema": SCHEMA, "plugins": raw_plugins, "ignored": raw_ignored }, true)
 	return data
 
 
@@ -97,8 +105,10 @@ func get_entry(id: String) -> Entry:
 	return plugins.get(id)
 
 
-## Records an installed version. Keeps the pin of an existing entry.
+## Records an installed version. Keeps the pin of an existing entry and replaces an entry this
+## version could not read.
 func set_installed(id: String, version: String, folder_hash: String, date: String) -> void:
+	skipped.erase(id)
 	var entry: Entry = plugins.get(id)
 	if entry == null:
 		entry = Entry.new()
@@ -118,7 +128,8 @@ func set_pinned(id: String, pinned: bool) -> bool:
 
 
 func remove(id: String) -> bool:
-	return plugins.erase(id)
+	var unreadable := skipped.erase(id)
+	return plugins.erase(id) or unreadable
 
 
 func is_ignored(id: String) -> bool:

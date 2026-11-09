@@ -12,6 +12,10 @@ const BackupDialog := preload("backup_dialog.gd")
 const Status := LoadoutManager.Status
 ## Characters of release notes shown in the update confirmation.
 const NOTES_PREVIEW := 600
+## Seconds between an install that needs a scan (a new GDExtension) and the scan.
+const SCAN_DELAY_S := 1.0
+## Meta of an action button that stays disabled whether or not an action runs.
+const UNAVAILABLE_META := &"loadout_unavailable"
 
 const STATUS_TEXT := {
 	Status.OK: "Up to date",
@@ -69,6 +73,7 @@ var store_search: Callable
 var auto_restart := true
 
 var _info_label: Label
+var _check_button: Button
 var _problems_label: Label
 var _install_missing_button: Button
 var _update_all_button: Button
@@ -81,6 +86,8 @@ var _version_width := 0
 var _columns_fitted := true
 var _unregistered_box: VBoxContainer
 var _unregistered_rows: VBoxContainer
+var _detail_scroll: ScrollContainer
+var _detail_box: VBoxContainer
 var _detail_title: Label
 var _detail_message: Label
 var _detail_grid: GridContainer
@@ -95,6 +102,13 @@ var _backup_dialog: BackupDialog
 var _export_dialog: EditorFileDialog
 var _import_dialog: EditorFileDialog
 var _on_confirm: Callable
+## What the confirmed action does, for the busy line ("Update · Fake A").
+var _confirm_label := ""
+## Actions _add_actions() collects for one plugin: [{ "text", "callable", "primary", "available", "danger" }].
+var _collected_actions: Array[Dictionary] = []
+## Right-click menu of the plugin list and the actions its items stand for (by index).
+var _context_menu: PopupMenu
+var _menu_actions: Array[Dictionary] = []
 var _selected_id := ""
 var _busy := false
 
@@ -105,7 +119,9 @@ func _ready() -> void:
 	add_theme_constant_override("separation", 6)
 	_build()
 	manager.states_changed.connect(_rebuild)
+	resized.connect(_fit_detail)
 	manager.restart_recommended.connect(_offer_restart)
+	manager.scan_requested.connect(_scan_soon)
 	manager.restart_required.connect(_on_restart_required)
 	_rebuild()
 
@@ -214,7 +230,9 @@ func _install_chosen(ids: PackedStringArray, starters: PackedStringArray, ignore
 			notes.append("•  %s skipped: %s" % [id, added["skipped"][id]])
 	var result := await _install_selected(to_install, ignore)
 	if result.get("ok", false) and not notes.is_empty():
+		# Skipped starters are worth reading, not a passing toast.
 		result["info"] = "\n".join(notes)
+		result["modal"] = true
 	return result
 
 
@@ -230,7 +248,7 @@ func offer_new_addons(found: Array[Dictionary]) -> void:
 	var others := "" if found.size() == 1 else "\n\nThe other new plugins are listed in the Loadout dock."
 	_ask("New plugin %s %s found in addons/%s.\n\nAdd it to your global plugins? Loadout then keeps it in sync across your projects and watches for updates.%s"
 			% [info["name"], info["version"], info["folder"], others],
-			"Add to registry…", func() -> void: _registry_dialog.open_existing(info), "Not now")
+			"Add to registry…", func() -> void: _registry_dialog.open_existing(info), "Not now", "Adding %s" % info["name"])
 
 
 func _build() -> void:
@@ -240,7 +258,8 @@ func _build() -> void:
 	_info_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_info_label.clip_text = true
 	header.add_child(_info_label)
-	header.add_child(_icon_button("Reload", "Check for updates (asks the sources now, not once a day)", func() -> void: _run(_check_updates)))
+	_check_button = _icon_button("Reload", "", func() -> void: _run(_check_updates, "Checking for updates"))
+	header.add_child(_check_button)
 	header.add_child(_icon_button("Add", "Add a plugin to the global registry", func() -> void: _registry_dialog.open()))
 	var menu := MenuButton.new()
 	menu.flat = true
@@ -254,6 +273,13 @@ func _build() -> void:
 	popup.add_item("GitHub token…", MENU_TOKEN)
 	popup.id_pressed.connect(_on_menu)
 	header.add_child(menu)
+
+	# Right under the header, where it is seen: what runs now (the dock is disabled meanwhile).
+	_busy_label = Label.new()
+	_busy_label.visible = false
+	_busy_label.clip_text = true
+	_busy_label.add_theme_color_override("font_color", _theme_color("accent_color", Color(0.44, 0.73, 0.98)))
+	add_child(_busy_label)
 
 	_problems_label = Label.new()
 	_problems_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -279,10 +305,20 @@ func _build() -> void:
 	_tree.set_column_expand(2, false)
 	var scale := EditorInterface.get_editor_scale()
 	_tree.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_tree.custom_minimum_size = Vector2(0, 160)
+	_tree.custom_minimum_size = Vector2(0, roundi(120 * scale))
 	_tree.item_selected.connect(_on_item_selected)
+	_tree.allow_rmb_select = true
+	_tree.item_mouse_selected.connect(_on_item_mouse_selected)
+	_tree.item_activated.connect(_on_item_activated)
 	_tree.resized.connect(_on_tree_resized)
-	add_child(_tree)
+	# The list and the detail share the height; drag the border between them to give one more room.
+	var split := VSplitContainer.new()
+	split.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	add_child(split)
+	var list_box := VBoxContainer.new()
+	list_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	split.add_child(list_box)
+	list_box.add_child(_tree)
 	for boundary in [1, 2]:
 		var grip := ColumnGrip.new()
 		grip.dragged.connect(_on_grip_dragged.bind(boundary))
@@ -291,7 +327,7 @@ func _build() -> void:
 		_grips.append(grip)
 
 	_unregistered_box = VBoxContainer.new()
-	add_child(_unregistered_box)
+	list_box.add_child(_unregistered_box)
 	var unregistered_title := Label.new()
 	unregistered_title.text = "Project addons not in the registry"
 	unregistered_title.tooltip_text = "Loadout does not manage these plugins. Add them to the registry to keep them in sync across projects."
@@ -301,25 +337,32 @@ func _build() -> void:
 	_unregistered_rows = VBoxContainer.new()
 	_unregistered_box.add_child(_unregistered_rows)
 
-	add_child(HSeparator.new())
+	# The detail is as tall as its content (see _fit_detail()); past that it scrolls instead of pushing
+	# the list away.
+	_detail_scroll = ScrollContainer.new()
+	_detail_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	split.add_child(_detail_scroll)
+	_detail_box = VBoxContainer.new()
+	_detail_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_detail_box.add_theme_constant_override("separation", 6)
+	_detail_scroll.add_child(_detail_box)
+	var detail := _detail_box
 	_detail_title = Label.new()
 	_detail_title.add_theme_font_override("font", _theme_font("bold"))
 	_detail_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	add_child(_detail_title)
+	detail.add_child(_detail_title)
 	_detail_message = Label.new()
 	_detail_message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	add_child(_detail_message)
+	detail.add_child(_detail_message)
 	_detail_grid = GridContainer.new()
 	_detail_grid.columns = 2
 	_detail_grid.add_theme_constant_override("h_separation", 12)
-	add_child(_detail_grid)
+	detail.add_child(_detail_grid)
 	_detail_actions = HFlowContainer.new()
-	add_child(_detail_actions)
-	_busy_label = Label.new()
-	_busy_label.text = "Working…"
-	_busy_label.visible = false
-	add_child(_busy_label)
-
+	detail.add_child(_detail_actions)
+	_context_menu = PopupMenu.new()
+	_context_menu.id_pressed.connect(func(index: int) -> void: _run(_menu_actions[index]["callable"], _action_label(_menu_actions[index])))
+	add_child(_context_menu)
 	var base := EditorInterface.get_base_control()
 	var dialog_size := Vector2i(roundi(480 * scale), 0)
 	_confirm = ConfirmationDialog.new()
@@ -328,7 +371,7 @@ func _build() -> void:
 	_confirm.cancel_button_text = "Cancel"
 	_confirm.confirmed.connect(func() -> void:
 		if _on_confirm.is_valid():
-			_run(_on_confirm))
+			_run(_on_confirm, _confirm_label))
 	base.add_child(_confirm)
 	_alert = AcceptDialog.new()
 	_alert.dialog_autowrap = true
@@ -338,31 +381,36 @@ func _build() -> void:
 	_export_dialog.current_file = "loadout_registry.json"
 	_export_dialog.file_selected.connect(func(path: String) -> void:
 		var err := manager.export_registry(path)
-		_show_alert("Registry saved to %s." % path if err == OK else "Export failed: %s" % error_string(err)))
+		if err == OK:
+			_toast("Registry saved to %s." % path)
+		else:
+			_show_alert("Export failed: %s" % error_string(err)))
 	base.add_child(_export_dialog)
 	_import_dialog = _file_dialog(EditorFileDialog.FILE_MODE_OPEN_FILE, "Import registry")
-	_import_dialog.file_selected.connect(func(path: String) -> void: _run(_import_registry.bind(path)))
+	_import_dialog.file_selected.connect(func(path: String) -> void: _run(_import_registry.bind(path), "Importing the registry"))
 	base.add_child(_import_dialog)
 	_install_dialog = InstallDialog.new()
 	_install_dialog.details_provider = func(id: String) -> Dictionary: return await manager.plugin_details(id)
 	_install_dialog.starters_hidden.connect(_on_starters_hidden)
 	_install_dialog.install_chosen.connect(func(ids: PackedStringArray, starters: PackedStringArray, ignore: PackedStringArray) -> void:
-		_run(_install_chosen.bind(ids, starters, ignore)))
+		_run(_install_chosen.bind(ids, starters, ignore), "Installing plugins"))
 	base.add_child(_install_dialog)
 	_version_dialog = VersionDialog.new()
 	_version_dialog.version_chosen.connect(func(id: String, version: String, pin: bool) -> void:
-		_run(func() -> Dictionary: return await manager.install(id, false, version, pin)))
+		_run(func() -> Dictionary: return await manager.install(id, false, version, pin), "Installing %s %s" % [_display_name(id), version]))
 	base.add_child(_version_dialog)
 	_backup_dialog = BackupDialog.new()
 	_backup_dialog.backup_chosen.connect(func(id: String, path: String, pin: bool) -> void:
-		_run(func() -> Dictionary: return await manager.restore_backup(id, path, pin)))
+		_run(func() -> Dictionary: return await manager.restore_backup(id, path, pin), "Restoring a backup of %s" % _display_name(id)))
 	base.add_child(_backup_dialog)
 	_registry_dialog = RegistryDialog.new()
 	_registry_dialog.store_search = store_search
 	_registry_dialog.entry_submitted.connect(func(data: Dictionary, take_over: bool) -> void:
-		_run(func() -> String: return await manager.add_registry_entry(data, take_over)))
+		_run(func() -> String: return await manager.add_registry_entry(data, take_over), "Adding %s to the registry" % str(data.get("id", ""))))
+	_registry_dialog.library_entry_submitted.connect(func(data: Dictionary, project_folder: String) -> void:
+		_run(func() -> String: return await manager.add_to_library(data, project_folder), "Copying %s to the plugin library" % project_folder))
 	_registry_dialog.entry_edited.connect(func(id: String, data: Dictionary) -> void:
-		_run(func() -> String: return await manager.update_registry_entry(id, data)))
+		_run(func() -> String: return await manager.update_registry_entry(id, data), "Saving %s" % _display_name(id)))
 	base.add_child(_registry_dialog)
 
 
@@ -372,7 +420,8 @@ func _rebuild() -> void:
 	for state in manager.states:
 		var item := _tree.create_item(root)
 		item.set_text(0, state.display_name)
-		item.set_tooltip_text(0, "%s\n%s" % [state.id, state.source_label])
+		item.set_tooltip_text(0, "%s\n%s\n\nDouble-click: %s. Right-click: all actions." % [state.id, state.source_label,
+				_primary_action_hint(state)])
 		item.set_tooltip_text(1, "\n".join(PackedStringArray([state.message, state.warning])).strip_edges())
 		item.set_metadata(0, state.id)
 		item.set_text(1, STATUS_TEXT[state.status])
@@ -383,7 +432,7 @@ func _rebuild() -> void:
 	if _columns_fitted:
 		_fit_columns(true)
 	_rebuild_unregistered()
-	_info_label.text = "Registry: %d · %s" % [manager.registry.entries.size() if manager.registry != null else 0, manager.lock_path.get_file()]
+	_update_header()
 	var problems := manager.errors.duplicate()
 	problems.append_array(manager.warnings)
 	for state in manager.states:
@@ -399,6 +448,47 @@ func _rebuild() -> void:
 	_update_all_button.text = "Update all (%d)…" % updates.size()
 	_update_all_button.visible = updates.size() > 1
 	_update_detail()
+
+
+## Header: how many plugins are in which state; the files and the last update check in the tooltips.
+func _update_header() -> void:
+	var counts := {}
+	for state in manager.states:
+		counts[state.status] = counts.get(state.status, 0) + 1
+	if not manager.loaded:
+		_info_label.text = "Checking…"
+	elif manager.states.is_empty():
+		_info_label.text = "No global plugins yet"
+	else:
+		_info_label.text = status_summary(counts)
+	var now := int(Time.get_unix_time_from_system())
+	var checked := manager.last_update_check()
+	var last := "never" if checked == 0 else time_ago(checked, now)
+	_info_label.tooltip_text = "Registry: %s\nLock: %s\nSources last answered: %s" % [
+			ProjectSettings.globalize_path(manager.registry_path), manager.lock_path, last]
+	_info_label.mouse_filter = Control.MOUSE_FILTER_PASS
+	_check_button.tooltip_text = "Check for updates now (last answer from the sources: %s; they are asked once a day by themselves)" % last
+
+
+## "Up to date 3 · Update 1 · Missing 1" from { Status: count }, in the order of the Status enum.
+static func status_summary(counts: Dictionary) -> String:
+	var parts := PackedStringArray()
+	for status: int in STATUS_TEXT:
+		if counts.get(status, 0) > 0:
+			parts.append("%s %d" % [STATUS_TEXT[status], counts[status]])
+	return " · ".join(parts)
+
+
+## "just now", "5 min ago", "3 h ago", "2 days ago" (a time in the future counts as now).
+static func time_ago(then: int, now: int) -> String:
+	var seconds := now - then
+	if seconds < 60:
+		return "just now"
+	if seconds < 3600:
+		return "%d min ago" % (seconds / 60)
+	if seconds < 48 * 3600:
+		return "%d h ago" % (seconds / 3600)
+	return "%d days ago" % (seconds / 86400)
 
 
 ## Sizes the Status and Version columns to their longest text (all status names, so the width
@@ -519,12 +609,15 @@ func _update_detail() -> void:
 	var state := manager.get_state(_selected_id)
 	if state == null:
 		_detail_title.text = ""
+		# A plugin without a message hid the line; the hint needs it back.
+		_detail_message.visible = true
 		if not manager.loaded:
 			_detail_message.text = "Reading the registry and checking the sources…"
 		elif manager.states.is_empty() and manager.errors.is_empty():
 			_detail_message.text = "The registry is empty. Add a plugin with the + button."
 		else:
 			_detail_message.text = "Select a plugin in the list."
+		_fit_detail.call_deferred()
 		return
 	var folder := state.entry.folder if state.entry != null else state.id
 	_detail_title.text = "%s  (addons/%s)" % [state.display_name, folder]
@@ -538,7 +631,98 @@ func _update_detail() -> void:
 	if state.lock_entry != null:
 		var lock := state.lock_entry
 		_add_row("Lock", "%s%s · %s · %s" % [lock.version, " (pin)" if lock.pinned else "", lock.folder_hash.substr(7, 8) if lock.folder_hash != "" else "no hash", lock.installed_at])
+	_add_links(state)
+	# Removals sit in one menu at the end, away from the actions a click can undo.
+	var removals: Array[Dictionary] = []
+	for action in _actions_for(state):
+		if action["danger"]:
+			removals.append(action)
+		else:
+			_detail_actions.add_child(_action_button(action))
+	if not removals.is_empty():
+		_detail_actions.add_child(_removal_menu(removals))
+	_fit_detail.call_deferred()
+
+
+## Gives the detail the height of its content, at most 60 % of the dock (dragging the border still
+## moves it). Deferred: the new rows have their size one frame later.
+func _fit_detail() -> void:
+	var lowest := 80.0 * EditorInterface.get_editor_scale()
+	var wanted := _detail_box.get_combined_minimum_size().y
+	_detail_scroll.custom_minimum_size.y = clampf(wanted, lowest, maxf(lowest, size.y * 0.6))
+
+
+## The actions of a plugin, in the order the detail panel shows them.
+func _actions_for(state: LoadoutManager.PluginState) -> Array[Dictionary]:
+	_collected_actions = []
 	_add_actions(state)
+	var actions := _collected_actions
+	_collected_actions = []
+	for action in actions:
+		action["subject"] = state.display_name
+	return actions
+
+
+## "Install 1.0.0 · Fake A" for the busy line.
+func _action_label(action: Dictionary) -> String:
+	return "%s · %s" % [str(action["text"]).trim_suffix("…"), action.get("subject", "")]
+
+
+func _display_name(id: String) -> String:
+	var state := manager.get_state(id)
+	return state.display_name if state != null else id
+
+
+## The available primary action (install, update), {} when the plugin has none.
+func _primary_action(state: LoadoutManager.PluginState) -> Dictionary:
+	for action in _actions_for(state):
+		if action["primary"] and action["available"]:
+			return action
+	return {}
+
+
+func _primary_action_hint(state: LoadoutManager.PluginState) -> String:
+	var action := _primary_action(state)
+	return "nothing to do" if action.is_empty() else str(action["text"]).trim_suffix("…").to_lower()
+
+
+func _on_item_activated() -> void:
+	var state := manager.get_state(_selected_id)
+	if state == null or _busy:
+		return
+	var action := _primary_action(state)
+	if not action.is_empty():
+		_run(action["callable"], _action_label(action))
+
+
+func _on_item_mouse_selected(mouse_position: Vector2, button_index: int) -> void:
+	if button_index != MOUSE_BUTTON_RIGHT:
+		return
+	var item := _tree.get_item_at_position(mouse_position)
+	if item == null:
+		return
+	if item.get_metadata(0) != _selected_id:
+		item.select(0)
+	var state := manager.get_state(_selected_id)
+	if state == null:
+		return
+	# Same order as the detail panel: the removals last, after a separator.
+	var removals: Array[Dictionary] = []
+	_menu_actions = []
+	for action in _actions_for(state):
+		(removals if action["danger"] else _menu_actions).append(action)
+	_menu_actions.append_array(removals)
+	_context_menu.clear()
+	var separated := false
+	for index in _menu_actions.size():
+		if _menu_actions[index]["danger"] and not separated and index > 0:
+			_context_menu.add_separator()
+			separated = true
+		_context_menu.add_item(_menu_actions[index]["text"], index)
+		_context_menu.set_item_disabled(_context_menu.item_count - 1, _busy or not _menu_actions[index]["available"])
+	_context_menu.reset_size()
+	_context_menu.position = Vector2i(_tree.get_screen_position() + mouse_position)
+	_context_menu.popup()
 
 
 func _add_actions(state: LoadoutManager.PluginState) -> void:
@@ -546,8 +730,7 @@ func _add_actions(state: LoadoutManager.PluginState) -> void:
 	var target := state.target_version
 	match state.status:
 		Status.MISSING:
-			var install := _action("Install %s" % target, func() -> Dictionary: return await manager.install(id), true)
-			install.disabled = target == ""
+			_action("Install %s" % target, func() -> Dictionary: return await manager.install(id), true, target != "")
 			_action("Ignore in this project", func() -> Error: return await manager.set_ignored(id, true))
 		Status.IGNORED:
 			_action("Stop ignoring", func() -> Error: return await manager.set_ignored(id, false))
@@ -562,7 +745,10 @@ func _add_actions(state: LoadoutManager.PluginState) -> void:
 			_action("Unpin", func() -> Error: return await manager.set_pinned(id, false))
 			_remove_action(state)
 		Status.MODIFIED:
-			_action("Show changes…", func() -> Dictionary: return await manager.changed_files(id))
+			_action("Show changes…", func() -> Dictionary:
+				var changes: Dictionary = await manager.changed_files(id)
+				changes["modal"] = true
+				return changes)
 			_action("Accept changes", func() -> Error: return await manager.adopt(id))
 			_overwrite_action(state)
 			_remove_action(state)
@@ -580,11 +766,14 @@ func _add_actions(state: LoadoutManager.PluginState) -> void:
 		var backups := manager.available_backups(id)
 		if not backups.is_empty():
 			_action("Restore backup…", func() -> void: _backup_dialog.open_for(state, backups))
+	var folder_path := manager.installer.addons_dir.path_join(state.entry.folder if state.entry != null else state.id)
+	if DirAccess.dir_exists_absolute(folder_path):
+		_action("Show in FileSystem", func() -> void: EditorInterface.get_file_system_dock().navigate_to_path(folder_path + "/"))
 	if state.entry != null:
 		_action("Edit…", func() -> void: _registry_dialog.open_edit(state.entry, state.display_name))
 		_action("Remove from registry…", func() -> void:
 			_ask("Remove %s from the global registry? This affects all projects. Files in this project stay." % state.display_name,
-					"Remove from registry", func() -> Error: return await manager.remove_registry_entry(id)))
+					"Remove from registry", func() -> Error: return await manager.remove_registry_entry(id)), false, true, true)
 
 
 func _confirm_update(state: LoadoutManager.PluginState) -> void:
@@ -596,7 +785,10 @@ func _confirm_update(state: LoadoutManager.PluginState) -> void:
 		return
 	var text := "Update %s %s → %s?" % [state.display_name, state.installed_version, state.target_version]
 	text += _notes_text(state)
-	text += "\n\nThe plugin is disabled, the old version is backed up to %s, the files are replaced and the plugin is enabled again. If the new version does not start, Loadout restores %s." % [backup, state.installed_version]
+	if state.native:
+		text += "\n\nThe old version is backed up to %s and the files are replaced. The plugin contains native code, which the editor only loads at startup, so the new version runs after you restart the editor." % backup
+	else:
+		text += "\n\nThe plugin is disabled, the old version is backed up to %s, the files are replaced and the plugin is enabled again. If the new version does not start, Loadout restores %s." % [backup, state.installed_version]
 	_ask(text, "Update", func() -> Dictionary: return await manager.install(state.id), "Not now")
 
 
@@ -630,7 +822,8 @@ func _import_registry(path: String) -> Dictionary:
 		lines.append("•  %s skipped: %s" % [id, summary["skipped"][id]])
 	for warning: String in summary["warnings"]:
 		lines.append("•  %s" % warning)
-	return { "ok": true, "info": "\n".join(lines) }
+	# Skipped or broken entries stay on screen; a clean import is a toast.
+	return { "ok": true, "info": "\n".join(lines), "modal": lines.size() > 1 }
 
 
 func _on_restart_required() -> void:
@@ -644,7 +837,7 @@ func _confirm_update_all() -> void:
 		var state := manager.get_state(id)
 		lines.append("•  %s %s → %s" % [state.display_name, state.installed_version, state.target_version])
 	_ask("Update %d plugins?\n\n%s\n\nEach one is disabled, backed up to user://loadout_backup/, replaced and enabled again. On failure its old version comes back." % [lines.size(), "\n".join(lines)],
-			"Update all", _install_updates, "Not now")
+			"Update all", _install_updates, "Not now", "Updating %d plugins" % lines.size())
 
 
 func _check_updates() -> Dictionary:
@@ -686,7 +879,7 @@ func _remove_action(state: LoadoutManager.PluginState) -> void:
 		return
 	_action("Remove from project…", func() -> void:
 		_ask("Remove %s from this project? The folder is backed up to user://loadout_backup/%s/ and Loadout stops installing it here." % [state.display_name, state.id],
-				"Remove", func() -> Dictionary: return await manager.uninstall(state.id)))
+				"Remove", func() -> Dictionary: return await manager.uninstall(state.id)), false, true, true)
 
 
 func _install_selected(ids: PackedStringArray, ignore: PackedStringArray) -> Dictionary:
@@ -706,7 +899,7 @@ func _offer_package_folders(folders: Dictionary) -> void:
 				state.entry.folder if state != null and state.entry != null else "?", folders[id]])
 	_ask("These packages keep the plugin in another folder than the registry:\n\n%s\n\nPlugins often use fixed res://addons/<folder>/ paths and break under another name. Use the package folders and install?"
 			% "\n".join(lines), "Use package folders", func() -> Dictionary:
-				return _summary_result(await manager.use_package_folders(folders), "Some plugins could not be installed:"), "Not now")
+				return _summary_result(await manager.use_package_folders(folders), "Some plugins could not be installed:"), "Not now", "Installing plugins")
 
 
 func _summary_result(summary: Dictionary, heading: String) -> Dictionary:
@@ -719,10 +912,13 @@ func _summary_result(summary: Dictionary, heading: String) -> Dictionary:
 	return { "ok": false, "error": "%s\n\n%s" % [heading, "\n".join(lines)] }
 
 
-## Runs an action (may await), keeps the dock disabled meanwhile and reports the result.
-func _run(action: Callable) -> void:
+## Runs an action (may await), keeps the dock disabled meanwhile and reports the result. label says
+## what runs, at the top of the dock.
+func _run(action: Callable, label: String = "") -> void:
 	if _busy:
 		return
+	_busy_label.text = "%s…" % (label.trim_suffix("…") if label != "" else "Working")
+	_busy_label.tooltip_text = _busy_label.text
 	_set_busy(true)
 	var result: Variant = await action.call()
 	_set_busy(false)
@@ -733,9 +929,16 @@ func _handle_result(result: Variant) -> void:
 	match typeof(result):
 		TYPE_DICTIONARY:
 			if result.get("ok", false):
-				var notice := "\n\n".join(PackedStringArray([result.get("info", ""), result.get("warning", "")])).strip_edges()
-				if notice != "":
-					_show_alert(notice)
+				# A warning (files differ from the lock) or something the user asked to read stays until
+				# dismissed; a plain report of what happened is a toast.
+				var info := str(result.get("info", ""))
+				var warning := str(result.get("warning", ""))
+				if warning != "" or result.get("modal", false):
+					var notice := "\n\n".join(PackedStringArray([info, warning])).strip_edges()
+					if notice != "":
+						_show_alert(notice)
+				elif info != "":
+					_toast(info)
 				return
 			# After a confirmation the action is repeated with the version and pin the user chose.
 			var version: String = result.get("version", "")
@@ -766,9 +969,38 @@ func _handle_result(result: Variant) -> void:
 				_show_alert(result)
 
 
+## A new GDExtension is only picked up by a scan, and the scan makes Godot reload every script, which
+## cancels any coroutine still running. The short delay lets the action that asked for it finish
+## and the dock redraw first.
+func _scan_soon() -> void:
+	get_tree().create_timer(SCAN_DELAY_S).timeout.connect(_scan_now, CONNECT_ONE_SHOT)
+
+
+func _scan_now() -> void:
+	EditorInterface.get_resource_filesystem().scan()
+	get_tree().create_timer(SCAN_DELAY_S).timeout.connect(_after_scan, CONNECT_ONE_SHOT)
+
+
+## Timers, not a coroutine, wait for the scan: the script reload it causes would cancel an await.
+func _after_scan() -> void:
+	if not is_inside_tree():
+		return
+	var next := _after_scan if EditorInterface.get_resource_filesystem().is_scanning() else _enable_scanned
+	get_tree().create_timer(SCAN_DELAY_S).timeout.connect(next, CONNECT_ONE_SHOT)
+
+
+## Native add-ons with an EditorPlugin are enabled once their library is loaded.
+func _enable_scanned() -> void:
+	if not is_inside_tree():
+		return
+	var problems: PackedStringArray = await manager.enable_scanned_plugins()
+	if not problems.is_empty():
+		_show_alert("\n".join(problems))
+
+
 func _offer_restart() -> void:
-	_ask("The new version removed some classes (class_name). The editor keeps listing them until it restarts. Restart now?",
-			"Restart editor", func() -> void: EditorInterface.restart_editor(true))
+	_ask("The editor has to restart for the change to take effect (a plugin with native code is loaded at startup, or the new version removed some classes). Restart now?",
+			"Restart editor", func() -> void: EditorInterface.restart_editor(true), "Cancel", "Restarting the editor")
 
 
 ## Removes the children at once (queue_free alone leaves them in the layout until the frame ends).
@@ -785,7 +1017,7 @@ func _set_busy(busy: bool) -> void:
 	_update_all_button.disabled = busy
 	for child in _detail_actions.get_children():
 		if child is Button:
-			child.disabled = busy
+			child.disabled = busy or child.get_meta(UNAVAILABLE_META, false)
 	# Rows rebuilt while busy (a refresh during an action) were created disabled, so they are reset here too.
 	for row in _unregistered_rows.get_children():
 		for child in row.get_children():
@@ -793,13 +1025,21 @@ func _set_busy(busy: bool) -> void:
 				child.disabled = busy
 
 
-func _ask(text: String, ok_text: String, on_confirm: Callable, cancel_text: String = "Cancel") -> void:
+## label: what the confirmed action does, for the busy line; "" uses ok_text and the selected plugin.
+func _ask(text: String, ok_text: String, on_confirm: Callable, cancel_text: String = "Cancel", label: String = "") -> void:
+	var state := manager.get_state(_selected_id)
+	_confirm_label = label if label != "" else ok_text if state == null else "%s · %s" % [ok_text, state.display_name]
 	_confirm.dialog_text = text
 	_confirm.ok_button_text = ok_text
 	_confirm.cancel_button_text = cancel_text
 	_on_confirm = on_confirm
 	_confirm.reset_size()
 	_confirm.popup_centered()
+
+
+## A report that needs no answer: the first line in the toast, all of it in its tooltip.
+func _toast(text: String) -> void:
+	EditorInterface.get_editor_toaster().push_toast("Loadout: %s" % text.get_slice("\n", 0), EditorToaster.SEVERITY_INFO, text)
 
 
 func _show_alert(text: String) -> void:
@@ -814,15 +1054,72 @@ func _on_item_selected() -> void:
 	_update_detail()
 
 
-func _action(text: String, callable: Callable, primary: bool = false) -> Button:
+## Adds an action of the plugin _actions_for() collects. available false: shown, but disabled
+## (nothing to install), also when an action ends.
+## danger: it removes something (the dock puts it in the Remove menu).
+func _action(text: String, callable: Callable, primary: bool = false, available: bool = true, danger: bool = false) -> void:
+	_collected_actions.append({ "text": text, "callable": callable, "primary": primary, "available": available, "danger": danger })
+
+
+func _action_button(action: Dictionary) -> Button:
 	var button := Button.new()
-	button.text = text
-	button.disabled = _busy
-	if primary:
+	button.text = action["text"]
+	button.set_meta(UNAVAILABLE_META, not action["available"])
+	button.disabled = _busy or not action["available"]
+	if action["primary"]:
 		button.add_theme_color_override("font_color", _theme_color("accent_color", Color(0.44, 0.73, 0.98)))
-	button.pressed.connect(func() -> void: _run(callable))
-	_detail_actions.add_child(button)
+	var callable: Callable = action["callable"]
+	var label := _action_label(action)
+	button.pressed.connect(func() -> void: _run(callable, label))
 	return button
+
+
+## "Remove ▾" with the removals of the plugin (each one still asks before it removes anything).
+func _removal_menu(actions: Array[Dictionary]) -> MenuButton:
+	var menu := MenuButton.new()
+	menu.text = "Remove"
+	menu.flat = false
+	menu.tooltip_text = "Remove the plugin from this project or from the global registry."
+	menu.icon = EditorInterface.get_editor_theme().get_icon("GuiOptionArrow", "EditorIcons")
+	menu.icon_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	menu.disabled = _busy
+	menu.set_meta(UNAVAILABLE_META, false)
+	var popup := menu.get_popup()
+	for index in actions.size():
+		popup.add_item(str(actions[index]["text"]).trim_prefix("Remove "), index)
+	popup.id_pressed.connect(func(index: int) -> void: _run(actions[index]["callable"], _action_label(actions[index])))
+	return menu
+
+
+## "Links: Plugin page · Release notes" (the release page of the version it would install, when the
+## source has one apart from the plugin page).
+func _add_links(state: LoadoutManager.PluginState) -> void:
+	var links := HFlowContainer.new()
+	links.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	links.add_theme_constant_override("h_separation", roundi(12 * EditorInterface.get_editor_scale()))
+	for link: Array in [["Plugin page", state.source_url], ["Release notes", state.release_url if state.release_url != state.source_url else ""]]:
+		if str(link[1]) == "":
+			continue
+		var button := LinkButton.new()
+		button.text = link[0]
+		button.uri = link[1]
+		button.tooltip_text = link[1]
+		links.add_child(button)
+	if links.get_child_count() == 0:
+		links.free()
+		return
+	var key := Label.new()
+	key.text = "Links"
+	key.modulate = Color(1, 1, 1, 0.7)
+	_detail_grid.add_child(key)
+	# A LinkButton has no margins; a Label's text starts after its style's: line them up with the rows above.
+	var label_style := get_theme_stylebox("normal", "Label")
+	var aligned := MarginContainer.new()
+	aligned.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	aligned.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	aligned.add_theme_constant_override("margin_left", roundi(label_style.get_margin(SIDE_LEFT)) if label_style != null else 0)
+	aligned.add_child(links)
+	_detail_grid.add_child(aligned)
 
 
 func _add_row(caption: String, value: String, tooltip: String = "") -> void:

@@ -84,6 +84,7 @@ func test_fetch_paid_or_gone() -> void:
 func test_describe_and_cache_key() -> void:
 	_setup()
 	check_eq(source.describe(), "Asset Store · rumys/fake-a", "describe")
+	check_eq(source.page_url(), "https://store.godotengine.org/asset/rumys/fake-a/", "store page")
 	check_eq(source.cache_key(), "store:rumys/fake-a@4.7", "cache key depends on the Godot version")
 	check_eq(StoreSource.new("rumys/fake-a", "fake_a", http).cache_key(), "store:rumys/fake-a", "no version, no suffix")
 	check(source.is_remote(), "remote")
@@ -142,3 +143,15 @@ func test_release_notes_fall_back_to_the_bbcode_changelog() -> void:
 	http.respond_json(RELEASES_URL, [release])
 	var result: Dictionary = await source.list_releases()
 	check_eq(result["releases"][0]["notes"], "Fixed x", "notes read from changes_bbcode as plain text")
+
+
+func test_godot_style_versions() -> void:
+	_setup()
+	http.respond_json(RELEASES_URL, [_release(3, "v2.5.stable"), _release(2, "v2.4.4.stable"), _release(4, "v2.6.dev2", false)])
+	var result: Dictionary = await source.list_releases()
+	var versions: PackedStringArray = []
+	for release: Dictionary in result["releases"]:
+		versions.append(release["version"])
+	check_eq(versions, PackedStringArray(["2.5.0", "2.4.4", "2.6.0-dev.2"]), "versions read")
+	check_eq(result["releases"][0]["tag"], "v2.5.stable", "the store's own text is the tag")
+	check_eq(result["releases"][0]["release_id"], 3, "downloads go by release id")

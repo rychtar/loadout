@@ -14,6 +14,20 @@ extends RefCounted
 ## Remote sources (needs network; registry with e.g. a GitHub entry, auto_install):
 ##   godot --headless -e --path <project> -- --loadout-registry=<file> --loadout-smoke=remote
 ##   forced update check, install of every registry plugin, running check, uninstall
+## GDExtension (needs network; use a temporary project, the extension stays loaded in that editor; registry
+## with a GitHub or store entry for an add-on that has a .gdextension, e.g. Orchestrator without a plugin.cfg
+## or Terrain3D with one):
+##   godot --headless -e --path <project> -- --loadout-registry=<file> --loadout-smoke=native [--loadout-keep]
+##   install, the scan the dock does afterwards, then checks that Godot loaded the extension without a
+##   restart and that the dock enabled the EditorPlugin of an add-on with a plugin.cfg. Godot reloads all
+##   scripts during that scan, which ends the coroutine, so the last checks run from timers and the
+##   process quits itself. Without --loadout-keep the add-ons are deleted again; with it, a second run
+##   checks that they still run in a new editor session:
+##   godot --headless -e --path <project> -- --loadout-registry=<file> --loadout-smoke=nativeverify
+##   An update of a loaded extension: install an older release first (a registry with an exact range,
+##   native --loadout-keep), then with a registry that allows the newer one
+##   godot --headless -e --path <project> -- --loadout-registry=<file> --loadout-smoke=nativeupdate
+##   (files replaced with a backup, a restart asked for, no scan) and nativeverify in a new session.
 ## Self-update (GUI or headless; registry has a "loadout" entry pointing to a newer Loadout copy):
 ##   godot -e --path <project> -- --loadout-registry=<file> --loadout-smoke=self
 ##   first run updates Loadout from the dock and the editor restarts itself. Godot relaunches it
@@ -27,16 +41,22 @@ extends RefCounted
 const GodotEditorBridge := preload("res://addons/loadout/editor/godot_editor_bridge.gd")
 const Log := preload("res://addons/loadout/util/log.gd")
 const Fs := preload("res://addons/loadout/util/fs.gd")
+const Package := preload("res://addons/loadout/util/package.gd")
 
 const FIXTURES := "res://tests/fixtures/addons/fake_a"
 const SMOKE_DIR := "user://loadout_smoke"
 const AUTOLOAD_NAME := "FakeA"
+## Native mode: how long after the scan the checks run, and the limit for the whole test.
+const NATIVE_SETTLE_S := 15.0
+const KEEP_ARG := "--loadout-keep"
+const NATIVE_GUARD_S := 180.0
 
 var _tree: SceneTree
 var _installer: LoadoutInstaller
 var _entry: LoadoutRegistry.Entry
 var _failures: PackedStringArray = []
 var _plugin: EditorPlugin
+var _native_scans := 0
 # Dock smoke state, shared by the _dock_* steps.
 var _manager: LoadoutManager
 var _dock: Control
@@ -56,6 +76,16 @@ func _init(tree: SceneTree, plugin: EditorPlugin = null) -> void:
 
 
 func run(mode: String) -> bool:
+	if mode == "nativeverify" or mode == "nativeupdate":
+		# An extension that does not load at startup is tried again by the first scan, which reloads every
+		# script and cancels this coroutine: the check runs from a timer and quits the editor itself.
+		Engine.set_meta("loadout_smoke", self)
+		var check := _native_verify_check if mode == "nativeverify" else _native_update_check
+		_tree.create_timer(NATIVE_SETTLE_S).timeout.connect(check, CONNECT_ONE_SHOT)
+		await _tree.create_timer(NATIVE_GUARD_S).timeout
+		_expect(false, "the check did not run in %d s" % NATIVE_GUARD_S)
+		Engine.remove_meta("loadout_smoke")
+		return false
 	var filesystem := EditorInterface.get_resource_filesystem()
 	while filesystem.is_scanning():
 		await _tree.process_frame
@@ -74,6 +104,8 @@ func run(mode: String) -> bool:
 			await _run_dock()
 		"remote":
 			await _run_remote()
+		"native":
+			await _run_native()
 		"self":
 			await _run_self()
 		"selfnew":
@@ -124,6 +156,9 @@ func _run_dock() -> void:
 	_registry_dialog = _dock.get("_registry_dialog")
 	_registry_path = _cmdline_value("--loadout-registry=")
 	_original_registry = FileAccess.get_file_as_string(_registry_path)
+	var editor_dock: EditorDock = _plugin.get("_editor_dock")
+	_expect(editor_dock != null and _dock.get_parent() == editor_dock, "the dock content sits in an EditorDock")
+	_expect(editor_dock != null and editor_dock.dock_icon != null and editor_dock.dock_icon.get_width() >= 16, "the dock has its icon")
 	_show_dock(_dock)
 	if not await _dock_install():
 		return
@@ -155,6 +190,12 @@ func _dock_install() -> bool:
 	_expect(FileAccess.file_exists(LoadoutLockfile.DEFAULT_PATH), "project lock written")
 	_select_first_plugin()
 	await _screenshot("dock_installed")
+	var show := _find_button(_dock, "Show in FileSystem")
+	_expect(show != null, "Show in FileSystem offered for an installed plugin")
+	if show != null:
+		show.pressed.emit()
+		await _wait_until(func() -> bool: return EditorInterface.get_current_directory() == "res://addons/fake_a/", 3000)
+		_expect(EditorInterface.get_current_directory() == "res://addons/fake_a/", "the FileSystem dock shows addons/fake_a (%s)" % EditorInterface.get_current_directory())
 	return true
 
 
@@ -188,14 +229,17 @@ func _dock_update() -> void:
 	_expect(updates == PackedStringArray(["fake_a"]), "update offered in the dock (%s)" % updates)
 	_select_first_plugin()
 	await _screenshot("dock_update_available")
+	await _dock_links()
 	var update_button := _find_button(_dock, "Update to 1.1.0")
 	_expect(update_button != null, "update button in the detail")
-	if update_button == null:
-		return
-	update_button.pressed.emit()
-	await _wait_until(func() -> bool: return _confirm.visible, 5000)
+	await _dock_context_menu()
+	# A double-click (or Enter) on the row runs the primary action: the update confirmation.
+	(_dock.get("_tree") as Tree).item_activated.emit()
+	_expect(await _wait_until(func() -> bool: return _confirm.visible, 5000), "a double-click asks to update")
 	await _screenshot("dock_update_confirm", _confirm)
 	_confirm.get_ok_button().pressed.emit()
+	var busy: Label = _dock.get("_busy_label")
+	_expect(busy.visible and busy.text == "Update · Fake A…", "the busy line names the action (%s)" % busy.text)
 	await _wait_until(func() -> bool: return _status_of("fake_a") == LoadoutManager.Status.OK, 30000)
 	_expect_running("1.1.0", "updated from the dock")
 	# FakeALegacy was removed in 1.1.0: the dock offers a restart, decline it.
@@ -203,6 +247,41 @@ func _dock_update() -> void:
 		await _screenshot("dock_restart_offer", _confirm)
 		_confirm.get_cancel_button().pressed.emit()
 		await _dialog_closed(_confirm)
+
+
+## A local source has no web page: give the state one to see the links row in the detail.
+func _dock_links() -> void:
+	var state := _manager.get_state("fake_a")
+	state.source_url = "https://example.com/fake_a"
+	state.release_url = "https://example.com/fake_a/releases/1.1.0"
+	_dock.call("_update_detail")
+	var uris := PackedStringArray()
+	for node in _dock.find_children("*", "LinkButton", true, false):
+		uris.append((node as LinkButton).uri)
+	_expect(uris == PackedStringArray([state.source_url, state.release_url]), "plugin page and release notes linked (%s)" % uris)
+	await _screenshot("dock_links")
+	state.source_url = ""
+	state.release_url = ""
+	_dock.call("_update_detail")
+
+
+## Right-click on the selected row: a menu with the same actions as the detail panel.
+func _dock_context_menu() -> void:
+	var tree: Tree = _dock.get("_tree")
+	var menu: PopupMenu = _dock.get("_context_menu")
+	var item := tree.get_root().get_first_child()
+	tree.item_mouse_selected.emit(tree.get_item_area_rect(item).get_center(), MOUSE_BUTTON_RIGHT)
+	_expect(await _wait_until(func() -> bool: return menu.visible, 2000), "right-click opens the action menu")
+	var texts := PackedStringArray()
+	for index in menu.item_count:
+		texts.append(menu.get_item_text(index))
+	_expect(texts.size() > 0 and texts[0].begins_with("Update to"), "the menu starts with the update (%s)" % ", ".join(texts))
+	_expect(texts.size() > 0 and texts[-1].begins_with("Remove from"), "the removals come last (%s)" % ", ".join(texts))
+	_expect(_find_button(_dock, "Remove from") == null and _find_button(_dock, "Remove") is MenuButton,
+			"the detail panel keeps the removals in the Remove menu")
+	await _screenshot("dock_context_menu", menu)
+	menu.hide()
+	await _dialog_closed(menu)
 
 
 ## A file added by hand makes the plugin Modified; "Show changes…" lists it.
@@ -242,7 +321,11 @@ func _dock_restore() -> void:
 		_expect(list.item_count >= 1 and list.get_item_text(0).begins_with(expected), "newest backup is %s (%s)" % [expected, list.get_item_text(0) if list.item_count > 0 else "none"])
 		await _screenshot("dock_restore_%s" % expected, dialog)
 		(dialog.get("_pin_check") as CheckBox).button_pressed = expected == "1.0.0"
-		dialog.get_ok_button().pressed.emit()
+		if expected == "1.0.0":
+			dialog.get_ok_button().pressed.emit()
+		else:
+			# A double-click on the row restores it too.
+			list.item_activated.emit(list.get_selected_items()[0])
 		await _wait_until(func() -> bool: return not _dock.get("_busy") and _installed_version() == expected, 30000)
 		_expect_running(expected, "restored %s from the dock" % expected)
 		if await _wait_until(func() -> bool: return _confirm.visible, 3000):
@@ -300,10 +383,29 @@ func _dock_add_dialogs() -> void:
 	var folder := (_registry_dialog.get("_folder_edit") as LineEdit).text
 	_expect(folder == "debug_draw_3d", "folder suggested from the title (%s)" % folder)
 	await _screenshot("dock_add_store", _registry_dialog)
+	await _dock_add_local_extension()
 	_registry_dialog.hide()
 	await _dialog_closed(_registry_dialog)
 	await _installer.uninstall(_entry)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(LoadoutLockfile.DEFAULT_PATH))
+
+
+## A local folder with a .gdextension and no plugin.cfg: the dialog asks for the version of its files.
+func _dock_add_local_extension() -> void:
+	_select_source(1)
+	var path_edit: LineEdit = _registry_dialog.get("_path_edit")
+	path_edit.text = ProjectSettings.globalize_path("res://tests/fixtures/addons/fake_ext/1.0.0")
+	path_edit.text_changed.emit(path_edit.text)
+	var version_row: Control = _registry_dialog.get("_local_version_row")
+	var ok := _registry_dialog.get_ok_button()
+	_expect(version_row.visible and ok.disabled, "a folder without plugin.cfg asks for its version first")
+	var version_edit: LineEdit = _registry_dialog.get("_local_version_edit")
+	version_edit.text = "1.0.0"
+	version_edit.text_changed.emit(version_edit.text)
+	_expect(not ok.disabled, "with the version it can be added")
+	var source: Dictionary = (_registry_dialog.call("_entry_data") as Dictionary)["source"]
+	_expect(source.get("version") == "1.0.0", "the version goes into the registry entry (%s)" % source)
+	await _screenshot("dock_add_local_extension", _registry_dialog)
 
 
 ## The starter plugins dialog (a canned pack with a local source, no network): choose, add to the
@@ -462,7 +564,15 @@ func _dock_new_addon() -> void:
 	_expect(folder_fixed, "folder fixed to the existing one")
 	await _screenshot("dock_add_existing", _registry_dialog)
 	_select_source(1)
+	# A local source first offers to copy the project's files to the plugin library (not done here: it
+	# would write into the real library folder).
+	var copy_check: CheckBox = _registry_dialog.get("_copy_check")
 	var path_edit: LineEdit = _registry_dialog.get("_path_edit")
+	var library_copy := str(_registry_dialog.call("library_dir")).path_join("fake_a")
+	_expect(copy_check.visible and copy_check.button_pressed and path_edit.text == library_copy and not _registry_dialog.get_ok_button().disabled,
+			"the library copy is offered (%s, path %s)" % [copy_check.button_pressed, path_edit.text])
+	await _screenshot("dock_add_library", _registry_dialog)
+	copy_check.button_pressed = false
 	path_edit.text = _fixture("1.0.0")
 	path_edit.text_changed.emit(path_edit.text)
 	_expect(folder_edit.text == "fake_a", "local path does not rename the folder")
@@ -513,11 +623,139 @@ func _run_remote() -> void:
 	_expect(summary["failed"].is_empty(), "install: %s" % summary["failed"])
 	for state in manager.states:
 		_expect(state.status == LoadoutManager.Status.OK, "%s installed, status %s" % [state.id, LoadoutManager.Status.find_key(state.status)])
-		_expect(_installer.editor.is_plugin_running(state.entry.folder), "%s EditorPlugin running" % state.id)
-		Log.write("remote %s: installed %s, hash %s" % [state.id, state.installed_version, state.lock_entry.folder_hash.left(19) if state.lock_entry != null else "-"])
+		if state.native:
+			# A GDExtension has no EditorPlugin to run, and its library only loads after a restart.
+			_expect(Fs.has_files(_installer.target_dir(state.entry)) and Package.has_extension(_installer.target_dir(state.entry)),
+					"%s native files in place" % state.id)
+		else:
+			_expect(_installer.editor.is_plugin_running(state.entry.folder), "%s EditorPlugin running" % state.id)
+		Log.write("remote %s: installed %s%s, hash %s" % [state.id, state.installed_version, " (native, active after a restart)" if state.native else "",
+				state.lock_entry.folder_hash.left(19) if state.lock_entry != null else "-"])
 	for state in manager.states:
 		await manager.uninstall(state.id)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(LoadoutLockfile.DEFAULT_PATH))
+
+
+## Installs the missing add-ons with native code and checks what happens after the scan the dock asks for.
+func _run_native() -> void:
+	# Godot reloads all scripts after the scan, which frees this object: keep it for the timer callbacks.
+	Engine.set_meta("loadout_smoke", self)
+	var manager: LoadoutManager = _plugin.get_manager()
+	# The dock scans and enables the plugins (its own timers); this only counts and checks afterwards.
+	manager.scan_requested.connect(_native_scan_requested)
+	# Let the startup sync finish first: it opens the install offer, which is not part of this test.
+	await _wait_until(func() -> bool: return manager.loaded, 60000)
+	await manager.refresh(true)
+	_expect(manager.errors.is_empty(), "registry and lock load: %s" % ", ".join(manager.errors))
+	var summary: Dictionary = await manager.install_missing()
+	_expect(summary["failed"].is_empty(), "install: %s" % summary["failed"])
+	_expect(not summary["restart_recommended"], "a new extension needs no restart")
+	_expect(_native_scans == 1, "one scan requested, got %d" % _native_scans)
+	for state in manager.states:
+		_expect(state.native and state.status == LoadoutManager.Status.OK, "%s installed as native code, status %s" % [state.id, LoadoutManager.Status.find_key(state.status)])
+	Log.write("native: installed, waiting for the scan")
+	# The scan ends this coroutine (script reload); _native_check finishes the test. The timer is only a guard.
+	await _tree.create_timer(NATIVE_GUARD_S).timeout
+	_expect(false, "the scan did not finish the test in %d s" % NATIVE_GUARD_S)
+	# Released before the editor quits, or it crashes on exit.
+	Engine.remove_meta("loadout_smoke")
+
+
+func _native_scan_requested() -> void:
+	_native_scans += 1
+	_tree.create_timer(NATIVE_SETTLE_S).timeout.connect(_native_check, CONNECT_ONE_SHOT)
+
+
+func _native_check() -> void:
+	var manager: LoadoutManager = _plugin.get_manager()
+	for state in manager.states:
+		_expect_native_running(state, "after the scan")
+	if not OS.get_cmdline_user_args().has(KEEP_ARG):
+		for state in manager.states:
+			Fs.remove_dir(_installer.target_dir(state.entry))
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(LoadoutLockfile.DEFAULT_PATH))
+	for failure in _failures:
+		Log.write("SMOKE FAIL %s" % failure, Log.Level.ERROR)
+	Log.write("SMOKE native: %s" % ("passed" if _failures.is_empty() else "%d failed" % _failures.size()))
+	Engine.remove_meta("loadout_smoke")
+	_tree.quit(0 if _failures.is_empty() else 1)
+
+
+func _native_update_check() -> void:
+	await _run_native_update()
+	_finish_from_timer("nativeupdate")
+
+
+## A session with the older release loaded: updates it. The editor cannot swap a loaded library, so
+## the files are replaced (with a backup) and a restart is asked for, without a scan.
+func _run_native_update() -> void:
+	var manager: LoadoutManager = _plugin.get_manager()
+	await _wait_until(func() -> bool: return manager.loaded, 60000)
+	await manager.refresh(true)
+	var restarts: Array[int] = [0]
+	var scans: Array[int] = [0]
+	manager.restart_recommended.connect(func() -> void: restarts[0] += 1)
+	manager.scan_requested.connect(func() -> void: scans[0] += 1)
+	var ids := manager.update_ids()
+	_expect(not ids.is_empty(), "an update is offered (%s)" % ", ".join(PackedStringArray(manager.states.map(
+			func(state: LoadoutManager.PluginState) -> String: return "%s %s" % [state.id, LoadoutManager.Status.find_key(state.status)]))))
+	for id in ids:
+		var before := manager.get_state(id)
+		var from := before.installed_version
+		var to := before.target_version
+		_expect(before.native, "%s is native code" % id)
+		var result: Dictionary = await manager.install(id)
+		_expect(result["ok"], "%s updated: %s" % [id, result["error"]])
+		_expect(result["native"] and result["restart_recommended"] and not result.get("scan_wanted", false),
+				"%s: files replaced, a restart asked for, no scan" % id)
+		_expect(Fs.has_files(str(result["backup_path"])), "%s: backup of %s in %s" % [id, from, result["backup_path"]])
+		var locked := LoadoutLockfile.load_file()["lockfile"] as LoadoutLockfile
+		_expect(locked.get_entry(id) != null and locked.get_entry(id).version == to, "%s: the lock says %s" % [id, to])
+		Log.write("nativeupdate: %s %s -> %s, backup %s" % [id, from, to, result["backup_path"]])
+	_expect(restarts[0] == ids.size() and scans[0] == 0, "one restart offer per update and no scan (%d, %d)" % [restarts[0], scans[0]])
+
+
+## Second session after native --loadout-keep: the add-ons load at startup and their EditorPlugins run.
+func _native_verify_check() -> void:
+	var manager: LoadoutManager = _plugin.get_manager()
+	_expect(manager.loaded, "the startup sync finished although the first scan reloaded every script")
+	await manager.refresh()
+	_expect(not manager.states.is_empty(), "the registry has the add-ons")
+	for state in manager.states:
+		_expect(state.status == LoadoutManager.Status.OK, "%s: status %s" % [state.id, LoadoutManager.Status.find_key(state.status)])
+		Log.write("nativeverify: %s %s" % [state.id, state.installed_version])
+		_expect_native_running(state, "in a new session")
+	_finish_from_timer("nativeverify")
+
+
+## Reports and quits a mode that ran from a timer (the test object is released first, or the editor
+## crashes on exit).
+func _finish_from_timer(mode: String) -> void:
+	for failure in _failures:
+		Log.write("SMOKE FAIL %s" % failure, Log.Level.ERROR)
+	Log.write("SMOKE %s: %s" % [mode, "passed" if _failures.is_empty() else "%d failed" % _failures.size()])
+	Engine.remove_meta("loadout_smoke")
+	_tree.quit(0 if _failures.is_empty() else 1)
+
+
+## The extension is loaded and, when the add-on has a plugin.cfg, its EditorPlugin runs and is saved
+## as enabled in project.godot.
+func _expect_native_running(state: LoadoutManager.PluginState, label: String) -> void:
+	var dir := _installer.target_dir(state.entry)
+	var loaded := false
+	for relative in Fs.list_files(dir):
+		if relative.ends_with(".gdextension"):
+			var path := dir.path_join(relative)
+			loaded = GDExtensionManager.is_extension_loaded(path)
+			Log.write("native: %s loaded=%s" % [path, loaded])
+	_expect(loaded, "%s %s: Godot loaded the extension" % [state.id, label])
+	if not Package.has_plugin_cfg(dir):
+		return
+	var running := _installer.editor.is_plugin_running(state.entry.folder)
+	var saved := FileAccess.get_file_as_string("res://project.godot").contains("res://addons/%s/plugin.cfg" % state.entry.folder)
+	Log.write("native: %s EditorPlugin running=%s, enabled in project.godot=%s" % [state.id, running, saved])
+	_expect(running, "%s %s: its EditorPlugin runs" % [state.id, label])
+	_expect(saved, "%s %s: enabled in project.godot" % [state.id, label])
 
 
 func _run_self() -> void:

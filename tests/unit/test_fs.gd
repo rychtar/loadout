@@ -61,6 +61,36 @@ func test_hash_ignores_editor_files_and_line_endings() -> void:
 	check_eq(Fs.hash_dir(dir), first, "CRLF equals LF")
 
 
+func test_hash_cache_waits_for_old_files_and_sees_changes() -> void:
+	var dir := temp_dir("fs_hash_cache")
+	write_text(dir.path_join("a.gd"), "extends Node\r\nvar a := 1\r\n")
+	var fresh := Fs.hash_dir(dir)
+	check(not Fs.is_hash_cached(dir), "a file from this second is not trusted for the cache")
+	if OS.get_name() == "Windows":
+		return # touch -t sets the file time below
+	var global := ProjectSettings.globalize_path(dir.path_join("a.gd"))
+	OS.execute("touch", ["-t", "202601010000", global])
+	check_eq(Fs.hash_dir(dir), fresh, "same hash")
+	check(Fs.is_hash_cached(dir), "older files are cached")
+	write_text(dir.path_join("a.gd"), "extends Node\r\nvar b := 2\r\n")
+	check(not Fs.is_hash_cached(dir), "an edit invalidates the cache")
+	check(Fs.hash_dir(dir) != fresh, "and is seen")
+	write_text(dir.path_join("b.gd"), "x")
+	OS.execute("touch", ["-t", "202601010000", global, ProjectSettings.globalize_path(dir.path_join("b.gd"))])
+	var with_new_file := Fs.hash_dir(dir)
+	check(Fs.is_hash_cached(dir), "cached again")
+	DirAccess.remove_absolute(dir.path_join("b.gd"))
+	check(Fs.hash_dir(dir) != with_new_file, "a removed file is seen")
+
+
+func test_crlf_normalization() -> void:
+	var dir := temp_dir("fs_crlf")
+	write_text(dir.path_join("a.txt"), "one\r\ntwo\rthree\r\n\r\nend\r")
+	write_text(dir.path_join("b.txt"), "one\ntwo\rthree\n\nend\r")
+	var hashes := Fs.file_hashes(dir)
+	check_eq(hashes["a.txt"], hashes["b.txt"], "only a CR before LF is dropped")
+
+
 func test_hash_binary_untouched() -> void:
 	var dir := temp_dir("fs_hash_binary")
 	var file := FileAccess.open(dir.path_join("data.bin"), FileAccess.WRITE)
@@ -71,3 +101,40 @@ func test_hash_binary_untouched() -> void:
 	file.store_buffer(PackedByteArray([0, 10, 1]))
 	file.close()
 	check(Fs.hash_dir(dir) != first, "CR in binary file matters")
+
+
+func test_link_stays_inside() -> void:
+	check(Fs.link_stays_inside("lib.framework/Versions/Current", "A"), "a sibling folder")
+	check(Fs.link_stays_inside("lib.framework/lib", "Versions/Current/lib"), "down the tree")
+	check(Fs.link_stays_inside("a/b/c", "../x"), "up and back down inside")
+	check(not Fs.link_stays_inside("a/b", "../../x"), "out of the folder")
+	check(not Fs.link_stays_inside("a", "/etc/passwd"), "absolute")
+	check(not Fs.link_stays_inside("a", "C:/Windows"), "a drive")
+	check(not Fs.link_stays_inside("a", ""), "empty")
+	check(not Fs.link_stays_inside("a/b", ".."), "the folder itself")
+
+
+func test_copy_keeps_links_inside_and_drops_links_out() -> void:
+	if OS.get_name() == "Windows":
+		return # making symlinks needs a right Windows does not give by default
+	var root := temp_dir("fs_links")
+	var src := root.path_join("src")
+	DirAccess.make_dir_recursive_absolute(src.path_join("Versions/A"))
+	write_text(src.path_join("Versions/A/lib"), "binary")
+	write_text(root.path_join("outside.txt"), "outside")
+	DirAccess.make_dir_recursive_absolute(root.path_join("outside_dir"))
+	var global := ProjectSettings.globalize_path(src)
+	DirAccess.open(global.path_join("Versions")).create_link("A", global.path_join("Versions/Current"))
+	var top := DirAccess.open(global)
+	top.create_link("Versions/Current/lib", global.path_join("lib"))
+	top.create_link("../outside.txt", global.path_join("out_file"))
+	top.create_link("../outside_dir", global.path_join("out_dir"))
+	var dst := root.path_join("dst")
+	check_eq(Fs.copy_dir(src, dst), OK, "copied")
+	var copied := DirAccess.open(ProjectSettings.globalize_path(dst))
+	check(copied.is_link("lib") and copied.read_link("lib") == "Versions/Current/lib", "a link inside stays a link")
+	check(DirAccess.open(ProjectSettings.globalize_path(dst.path_join("Versions"))).is_link("Current"), "so does a folder link")
+	check_eq(FileAccess.get_file_as_string(dst.path_join("lib")), "binary", "and it works")
+	check(not copied.is_link("out_file") and FileAccess.get_file_as_string(dst.path_join("out_file")) == "outside", "a file link out is copied as the file")
+	check(not DirAccess.dir_exists_absolute(dst.path_join("out_dir")), "a folder link out is left out")
+	check_eq(Fs.copy_dir(src, dst), OK, "copying again over the same links works")

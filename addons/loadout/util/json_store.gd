@@ -6,9 +6,16 @@ extends RefCounted
 ## - A corrupt file is backed up to *.bak (never overwriting an older backup, and not backed up
 ##   again while an identical backup exists) and never overwritten.
 ## - An empty file counts as missing: there is nothing in it to lose.
-## - Writes go through a temporary file so a crash cannot leave a half-written file.
+## - Writes go through a temporary file so a crash cannot leave a half-written file. On Windows Godot
+##   deletes the old file before it renames the new one into place; a reader in that moment finds the
+##   finished temporary file and reads that instead of an empty registry.
 
 const Log := preload("log.gd")
+
+const TMP_SUFFIX := ".tmp"
+## A temporary file only stands in for a missing file while it is this fresh (a write in progress,
+## not one a crash left behind).
+const PENDING_WRITE_S := 10
 
 enum Status { OK, MISSING, CORRUPT, UNKNOWN_SCHEMA }
 
@@ -46,11 +53,12 @@ static func write(path: String, data: Dictionary, schema: int) -> Error:
 	var err := DirAccess.make_dir_recursive_absolute(path.get_base_dir())
 	if err != OK:
 		return err
-	var tmp_path := path + ".tmp"
+	# One temporary file per editor: two editors saving the shared registry at once must not write into one file.
+	var tmp_path := "%s.%d%s" % [path, OS.get_process_id(), TMP_SUFFIX]
 	var file := FileAccess.open(tmp_path, FileAccess.WRITE)
 	if file == null:
 		return FileAccess.get_open_error()
-	file.store_string(JSON.stringify(data, "\t") + "\n")
+	file.store_string(JSON.stringify(whole_numbers(data), "\t") + "\n")
 	err = file.get_error()
 	file.close()
 	if err != OK:
@@ -59,12 +67,57 @@ static func write(path: String, data: Dictionary, schema: int) -> Error:
 	return DirAccess.rename_absolute(tmp_path, path)
 
 
+## JSON has one number type and Godot reads every number as a float, which it writes back as "5.0".
+## Whole numbers become ints again, so fields kept for other Loadout versions do not change.
+static func whole_numbers(value: Variant) -> Variant:
+	match typeof(value):
+		TYPE_FLOAT:
+			var number: float = value
+			if is_finite(number) and number == floorf(number) and absf(number) < 9.0e15:
+				return int(number)
+		TYPE_DICTIONARY:
+			var converted := {}
+			for key: Variant in value:
+				converted[key] = whole_numbers(value[key])
+			return converted
+		TYPE_ARRAY:
+			var converted := []
+			for item: Variant in value:
+				converted.append(whole_numbers(item))
+			return converted
+	return value
+
+
 static func _inspect(path: String, schema: int) -> Dictionary:
 	if not FileAccess.file_exists(path):
-		return { "status": Status.MISSING }
+		return _inspect_pending_write(path, schema)
 	var text := FileAccess.get_file_as_string(path)
 	if text.is_empty() and FileAccess.get_open_error() != OK:
 		return { "status": Status.CORRUPT, "error": "File %s cannot be read: %s." % [path, error_string(FileAccess.get_open_error())] }
+	return _parse(text, path, schema)
+
+
+## A missing file whose new version is being renamed into place (see write()): the newest fresh
+## temporary file of it when it is complete, otherwise the file counts as missing.
+static func _inspect_pending_write(path: String, schema: int) -> Dictionary:
+	var dir := path.get_base_dir()
+	var prefix := path.get_file() + "."
+	var newest := ""
+	var newest_time := 0
+	if DirAccess.dir_exists_absolute(dir):
+		for file_name in DirAccess.get_files_at(dir):
+			if file_name.begins_with(prefix) and file_name.ends_with(TMP_SUFFIX):
+				var modified := FileAccess.get_modified_time(dir.path_join(file_name))
+				if modified > newest_time:
+					newest = dir.path_join(file_name)
+					newest_time = modified
+	if newest == "" or absi(int(Time.get_unix_time_from_system()) - newest_time) > PENDING_WRITE_S:
+		return { "status": Status.MISSING }
+	var pending := _parse(FileAccess.get_file_as_string(newest), path, schema)
+	return pending if pending["status"] == Status.OK else { "status": Status.MISSING }
+
+
+static func _parse(text: String, path: String, schema: int) -> Dictionary:
 	if text.strip_edges().is_empty():
 		return { "status": Status.MISSING }
 	var json := JSON.new()

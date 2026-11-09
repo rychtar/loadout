@@ -32,6 +32,10 @@ func get_plugin_name() -> String:
 	return str(releases[0].get("title", "")) if not releases.is_empty() else ""
 
 
+func page_url() -> String:
+	return ASSET_PAGE % asset_id
+
+
 func is_remote() -> bool:
 	return true
 

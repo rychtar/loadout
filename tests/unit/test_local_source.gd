@@ -20,6 +20,21 @@ func test_latest_version_outside_range() -> void:
 	check(str(result["error"]).contains("1.1.0"), "error names the version")
 
 
+func test_extension_folder_takes_the_version_from_the_registry() -> void:
+	var entry: LoadoutRegistry.Entry = LoadoutRegistry.parse_entry({ "id": "fake_ext", "source": { "type": "local",
+			"path": ProjectSettings.globalize_path("res://tests/fixtures/addons/fake_ext/1.0.0"), "version": "1.0.0" } })["entry"]
+	var source := LoadoutSource.create(entry)
+	var latest: Dictionary = await source.get_latest_version("^1.0.0")
+	check(latest["ok"] and latest["version"] == "1.0.0", "the registry version: %s" % latest["error"])
+	var dest := temp_dir("local_ext").path_join("staged")
+	var fetched: Dictionary = await source.fetch("1.0.0", dest)
+	check(fetched["ok"] and FileAccess.file_exists(dest.path_join("fake_ext.gdextension")), "the folder is copied: %s" % fetched["error"])
+	var without: LoadoutRegistry.Entry = LoadoutRegistry.parse_entry({ "id": "fake_ext", "source": { "type": "local",
+			"path": ProjectSettings.globalize_path("res://tests/fixtures/addons/fake_ext/1.0.0") } })["entry"]
+	var error: String = (await LoadoutSource.create(without).get_latest_version("*"))["error"]
+	check(error.contains("Enter its version"), "says what is missing: %s" % error)
+
+
 func test_missing_plugin_cfg() -> void:
 	var dir := temp_dir("local_empty")
 	var result: Dictionary = await _source(dir).get_latest_version("*")

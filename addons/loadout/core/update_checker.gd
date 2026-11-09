@@ -15,6 +15,10 @@ const FILE_NAME := "loadout_cache.json"
 const CHECK_INTERVAL_S := 24 * 60 * 60
 ## A failed check with nothing cached (so no plugin can be installed) is retried after this long.
 const RETRY_INTERVAL_S := 15 * 60
+## How the cached releases were read from the source. Raised when that changes (2: "-stable" tags are
+## releases): an older entry is checked again at the next refresh, without its ETag (a 304 answer
+## would keep the old reading), and its releases stay as the offline fallback until then.
+const RELEASES_FORMAT := 2
 
 var path: String
 ## Problems with the cache file itself (shown in the dock, the cache is then rebuilt).
@@ -54,8 +58,12 @@ func load_cache() -> void:
 	if typeof(sources) == TYPE_DICTIONARY:
 		for key: Variant in sources:
 			var entry := _valid_entry(sources[key])
-			if not entry.is_empty():
-				_sources[str(key)] = entry
+			if entry.is_empty():
+				continue
+			if int(entry.get("format", 1)) < RELEASES_FORMAT:
+				entry["checked_at"] = 0
+				entry.erase("etag")
+			_sources[str(key)] = entry
 
 
 func save_cache() -> Error:
@@ -73,6 +81,14 @@ func is_due(key: String) -> bool:
 	var entry: Dictionary = _sources.get(key, {})
 	var age: int = _now.call() - int(entry.get("checked_at", 0))
 	return age < 0 or age >= CHECK_INTERVAL_S
+
+
+## Unix time of the newest answer a remote source gave (0 when none answered yet), for the dock.
+func last_answer_at() -> int:
+	var newest := 0
+	for key: String in _sources:
+		newest = maxi(newest, int(_sources[key].get("updated_at", 0)))
+	return newest
 
 
 ## The cache entry when it has the expected shape, otherwise {} (a hand-edited file must not crash).
@@ -122,6 +138,8 @@ func load_releases(source: LoadoutSource, force: bool = false) -> Dictionary:
 			cached = answer["releases"]
 		entry["etag"] = answer["etag"]
 		entry["updated_at"] = entry["checked_at"]
+		if not answer["not_modified"]:
+			entry["format"] = RELEASES_FORMAT
 		entry["last_error"] = ""
 		result["checked"] = true
 		result["error"] = "" if not cached.is_empty() else "The source has no releases."

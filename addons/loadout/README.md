@@ -29,8 +29,9 @@ plugins a project is missing, keeps their versions in a lock file and tells you 
 1. Copy `addons/loadout/` into your project's `addons/` folder (or install it from the Asset Store).
 2. Enable **Loadout** in **Project → Project Settings → Plugins**.
 
-You need Godot 4.5 or newer (tested on 4.5.1 and 4.7.1). For many projects, one command does both steps. It is safe to run again, and
-a different Loadout version is replaced only with `--force` (close the project's editor first):
+You need Godot 4.7 or newer (tested on 4.7.1): Loadout uses the Godot Asset Store, which came with 4.7. For many projects, one command does both steps. It is safe to run again, and
+a different Loadout version is replaced only with `--force` (close the project's editor first; the old
+version comes back if the copy fails):
 
 ```bash
 tools/install_loadout.sh ~/path/to/your/project
@@ -41,13 +42,16 @@ through Godot: `godot --headless --path <this repository> --script res://tools/i
 
 ## Usage
 
-Everything is in the **Loadout** dock on the right side of the editor. Drag a column border in the
-plugin list to resize it, double-click it to fit the column to its text.
+Everything is in the **Loadout** dock on the right side of the editor. Right-click a plugin for all its
+actions, double-click it to install or update it. Drag a column border in the plugin list to resize it,
+double-click it to fit the column to its text; drag the border above the detail to share the height.
 
 - **Add a plugin**: **+** searches the Asset Store, takes a GitHub repository (`owner/name`) or a
-  local folder with `plugin.cfg`. Allowed versions: `*` (newest), `^1.2.0` (minor and patch
-  updates) or `~1.2.0` (patch updates only). Plugins that appear in `addons/` by other means are
-  offered for the registry too.
+  local folder with `plugin.cfg` (or with a `.gdextension`; you then enter the version of its files).
+  Allowed versions: `*` (newest), `^1.2.0` (minor and patch updates) or `~1.2.0` (patch updates
+  only). Plugins that appear in `addons/` by other means are offered for the registry too; with a
+  local source, **Add to registry…** can copy such a plugin into your plugin library (Editor
+  Settings → Loadout → Library Path) and register that copy.
 - **New project**: the missing plugins are listed with a checkbox each, unchecked ones can be
   ignored in this project. **Install missing…** opens the same list later.
 - **Update**: a plugin with a newer version shows **Update** and its release notes. **Update all…**
@@ -56,8 +60,8 @@ plugin list to resize it, double-click it to fit the column to its text.
   release, and installing an older one pins it.
 - **Modified** means the folder differs from the lock: **Accept changes** keeps your edits,
   **Overwrite** replaces them (with a backup).
-- **Remove from project…** deletes the folder (with a backup) and ignores the plugin here.
-  **Remove from registry…** stops offering it in all projects. **⋮** exports and imports the registry.
+- **Remove** ▾ **from project…** deletes the folder (with a backup) and ignores the plugin here.
+  **from registry…** stops offering it in all projects. **⋮** exports and imports the registry.
 
 ## How updates work
 

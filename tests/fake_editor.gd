@@ -50,6 +50,11 @@ func validate_scripts(dir: String) -> Error:
 	return ERR_PARSE_ERROR if broken_versions.has(_version(dir)) else OK
 
 
+func enable_on_restart(folder: String) -> Error:
+	calls.append("enable_on_restart %s" % folder)
+	return OK
+
+
 func save_project_settings() -> Error:
 	calls.append("save")
 	return OK

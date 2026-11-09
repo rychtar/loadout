@@ -14,6 +14,9 @@ const ENABLED_KEY := "enabled="
 const ACTION_INSTALLED := "installed"
 const ACTION_UPDATED := "updated"
 const ACTION_UNCHANGED := "unchanged"
+## The old version is moved here while the new one is copied (a hidden folder, Godot does not import
+## it), and moved back when the copy fails.
+const PREVIOUS_FOLDER := ".loadout_previous"
 
 
 ## loadout_dir: the Loadout folder to copy, project_dir: folder with project.godot (absolute paths).
@@ -49,19 +52,32 @@ static func install(loadout_dir: String, project_dir: String, force: bool = fals
 				result["previous"] if result["previous"] != "" else "?", result["version"]]
 			return result
 		else:
-			var removed := Fs.remove_dir(target)
-			if removed != OK:
-				result["error"] = "Cannot delete the old version: %s" % error_string(removed)
-				return result
 			result["action"] = ACTION_UPDATED
 	else:
 		result["action"] = ACTION_INSTALLED
 
+	var previous := target.get_base_dir().path_join(PREVIOUS_FOLDER)
+	if result["action"] == ACTION_UPDATED:
+		if DirAccess.dir_exists_absolute(previous):
+			result["error"] = "%s is left from an earlier run. Check it (it may be the only copy of the old version) and delete it." % previous
+			return result
+		var moved := DirAccess.rename_absolute(target, previous)
+		if moved != OK:
+			result["error"] = "Cannot move the old version aside: %s" % error_string(moved)
+			return result
 	if result["action"] != ACTION_UNCHANGED:
 		var err := Fs.copy_dir(loadout_dir, target, Fs.DEFAULT_EXCLUDE)
 		if err != OK:
-			result["error"] = "Copying to %s failed: %s" % [target, error_string(err)]
+			result["error"] = "Copying to %s failed: %s." % [target, error_string(err)]
+			Fs.remove_dir(target)
+			if result["action"] == ACTION_UPDATED:
+				if DirAccess.rename_absolute(previous, target) == OK:
+					result["error"] += " Loadout %s is back." % result["previous"]
+				else:
+					result["error"] += " The old version is in %s." % previous
 			return result
+		if result["action"] == ACTION_UPDATED:
+			Fs.remove_dir(previous)
 	if enabled["text"] != project_text:
 		# Through a temporary file: a crash must not leave a half-written project.godot.
 		var tmp_file := project_file + ".loadout.tmp"

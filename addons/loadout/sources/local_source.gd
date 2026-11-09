@@ -2,11 +2,12 @@
 class_name LoadoutLocalSource
 extends LoadoutSource
 
-## Plugin folder on this machine (absolute path to the folder with plugin.cfg).
-## It only offers the version currently in its plugin.cfg.
+## Plugin folder on this machine (absolute path to the folder with plugin.cfg or a .gdextension).
+## It only offers the version currently in its plugin.cfg, or version_override when that has none.
 
 var path: String
-## Version to report when the folder's plugin.cfg has none (restoring a backup of such a plugin).
+## Version to report when the folder's plugin.cfg has none: a GDExtension without plugin.cfg (the
+## registry entry's "version"), or a backup of one being restored.
 var version_override := ""
 
 
@@ -64,7 +65,7 @@ func fetch(version: String, dest_dir: String) -> Dictionary:
 
 
 func _no_version_error() -> String:
-	return "Folder %s has no plugin.cfg with a version." % path
+	return "Folder %s has no plugin.cfg with a version. Enter its version in the registry entry (Edit…)." % path
 
 
 func _current_version() -> String:

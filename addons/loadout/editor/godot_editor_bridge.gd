@@ -7,7 +7,9 @@ const Fs := preload("../util/fs.gd")
 const Log := preload("../util/log.gd")
 
 const ADDONS_DIR := "res://addons"
-const SCAN_TIMEOUT_MS := 30000
+## How long a scan Loadout starts may take, counted from its start: a large project scans for a while,
+## and a timeout makes an update roll back. A scan already running is waited for on its own.
+const SCAN_TIMEOUT_MS := 120000
 const SETTLE_FRAMES := 10
 const TEMP_VALIDATE_DIR := "user://loadout_validate"
 const CLASS_NAME_PATTERN := "(?m)^class_name\\s+(\\w+).*$"
@@ -44,6 +46,7 @@ func scan() -> bool:
 	var deadline := Time.get_ticks_msec() + SCAN_TIMEOUT_MS
 	while filesystem.is_scanning() and Time.get_ticks_msec() < deadline:
 		await _tree.process_frame
+	deadline = Time.get_ticks_msec() + SCAN_TIMEOUT_MS
 	var state := { "changed": false }
 	var on_changed := func() -> void: state["changed"] = true
 	filesystem.filesystem_changed.connect(on_changed)
@@ -147,6 +150,16 @@ static func first_class_used(source: String, names: PackedStringArray) -> String
 		if RegEx.create_from_string("\\b%s\\b" % class_name_text).search(source) != null:
 			return class_name_text
 	return ""
+
+
+## The editor reads editor_plugins/enabled again whenever a plugin is toggled, so the entry stays.
+func enable_on_restart(folder: String) -> Error:
+	var path := ADDONS_DIR.path_join(folder).path_join("plugin.cfg")
+	var enabled := PackedStringArray(ProjectSettings.get_setting("editor_plugins/enabled", PackedStringArray()))
+	if not enabled.has(path):
+		enabled.append(path)
+		ProjectSettings.set_setting("editor_plugins/enabled", enabled)
+	return ProjectSettings.save()
 
 
 func save_project_settings() -> Error:

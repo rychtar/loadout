@@ -15,7 +15,7 @@ config_version=5
 
 [application]
 
-config/name="Nova hra"
+config/name="New Game"
 config/features=PackedStringArray("4.5", "Forward Plus")
 config/icon="res://icon.svg"
 """
@@ -121,6 +121,25 @@ func test_force_removes_files_of_old_version() -> void:
 	Setup.install(old, project)
 	Setup.install(_fake_loadout("stale_new", "0.2.0"), project, true)
 	check(not FileAccess.file_exists(project.path_join("addons/loadout/old_only.gd")), "stale file removed")
+
+
+func test_failed_copy_keeps_the_old_version() -> void:
+	if OS.get_name() == "Windows":
+		return # an unreadable file (chmod) makes the copy fail
+	var project := _project("force_fails")
+	Setup.install(_fake_loadout("force_fails_old", "0.1.0"), project)
+	var newer := _fake_loadout("force_fails_new", "0.2.0")
+	write_text(newer.path_join("locked.gd"), "extends Node\n")
+	var locked := ProjectSettings.globalize_path(newer.path_join("locked.gd"))
+	OS.execute("chmod", ["000", locked])
+	var result := Setup.install(newer, project, true)
+	OS.execute("chmod", ["644", locked])
+	check(not result["ok"], "copy failed")
+	check(str(result["error"]).contains("0.1.0 is back"), "says so: %s" % result["error"])
+	check_eq(_installed_version(project), "0.1.0", "old version in place")
+	check(not DirAccess.dir_exists_absolute(project.path_join("addons").path_join(Setup.PREVIOUS_FOLDER)), "nothing left aside")
+	check(Setup.install(newer, project, true)["ok"], "works once the file is readable")
+	check(not DirAccess.dir_exists_absolute(project.path_join("addons").path_join(Setup.PREVIOUS_FOLDER)), "old copy removed after the update")
 
 
 func test_not_a_godot4_project() -> void:

@@ -30,6 +30,10 @@ func describe() -> String:
 	return "Asset Store · %s" % asset
 
 
+func page_url() -> String:
+	return ASSET_PAGE % asset
+
+
 func is_remote() -> bool:
 	return true
 

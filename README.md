@@ -20,6 +20,8 @@ plugins a project is missing, keeps their versions in a lock file and tells you 
   release.
 - **Hands off your changes**: a plugin you edited by hand or pinned is never overwritten without
   asking.
+- **GDExtensions too**: add-ons made of native code (such as Orchestrator) are installed and updated
+  like plugins; a new one loads right away, an update takes effect after an editor restart.
 - **Takes over what you already have**: add plugins that are already in the project to the registry
   without reinstalling them.
 - Updates itself, has no dependencies and runs only in the editor.
@@ -29,8 +31,9 @@ plugins a project is missing, keeps their versions in a lock file and tells you 
 1. Copy `addons/loadout/` into your project's `addons/` folder (or install it from the Asset Store).
 2. Enable **Loadout** in **Project → Project Settings → Plugins**.
 
-You need Godot 4.5 or newer (tested on 4.5.1 and 4.7.1). For many projects, one command does both steps. It is safe to run again, and
-a different Loadout version is replaced only with `--force` (close the project's editor first):
+You need Godot 4.7 or newer (tested on 4.7.1): Loadout uses the Godot Asset Store, which came with 4.7. For many projects, one command does both steps. It is safe to run again, and
+a different Loadout version is replaced only with `--force` (close the project's editor first; the old
+version comes back if the copy fails):
 
 ```bash
 tools/install_loadout.sh ~/path/to/your/project
@@ -41,13 +44,16 @@ through Godot: `godot --headless --path <this repository> --script res://tools/i
 
 ## Usage
 
-Everything is in the **Loadout** dock on the right side of the editor. Drag a column border in the
-plugin list to resize it, double-click it to fit the column to its text.
+Everything is in the **Loadout** dock on the right side of the editor. Right-click a plugin for all its
+actions, double-click it to install or update it. Drag a column border in the plugin list to resize it,
+double-click it to fit the column to its text; drag the border above the detail to share the height.
 
 - **Add a plugin**: **+** searches the Asset Store, takes a GitHub repository (`owner/name`) or a
-  local folder with `plugin.cfg`. Allowed versions: `*` (newest), `^1.2.0` (minor and patch
-  updates) or `~1.2.0` (patch updates only). Plugins that appear in `addons/` by other means are
-  offered for the registry too.
+  local folder with `plugin.cfg` (or with a `.gdextension`; you then enter the version of its files).
+  Allowed versions: `*` (newest), `^1.2.0` (minor and patch updates) or `~1.2.0` (patch updates
+  only). Plugins that appear in `addons/` by other means are offered for the registry too; with a
+  local source, **Add to registry…** can copy such a plugin into your plugin library (Editor
+  Settings → Loadout → Library Path) and register that copy.
 - **Starter plugins…** (in **⋮**): the install dialog with two lists. On the left are the plugins
   this project lacks from your registry and the **Starter pack** (tagged), a short list of plugins
   that suit most projects. Move what you want to the right (button or double-click), **Install
@@ -66,8 +72,8 @@ plugin list to resize it, double-click it to fit the column to its text.
   removal). The newest 10 backups of each plugin are kept.
 - **Include pre-releases** (in the add/edit dialog) offers betas and release candidates as updates.
   If a new release does not start on your Godot version, Loadout offers the next older one.
-- **Remove from project…** deletes the folder (with a backup) and ignores the plugin here.
-  **Remove from registry…** stops offering it in all projects. **⋮** exports and imports the registry.
+- **Remove** ▾ **from project…** deletes the folder (with a backup) and ignores the plugin here.
+  **from registry…** stops offering it in all projects. **⋮** exports and imports the registry.
 
 ## How updates work
 
@@ -76,6 +82,14 @@ The plugin is disabled and its folder backed up to `user://loadout_backup/`, the
 the plugin is enabled and checked again. Any failure brings the backup back. Loadout updates itself
 the same way and restarts the editor. Offline, it uses the data it saved last time and warns in the
 dock.
+
+An add-on with a `.gdextension` file (a GDExtension, with or without `plugin.cfg`) is different. A new
+one is copied and Godot loads it itself; when it also has a `plugin.cfg`, its editor plugin is enabled
+right after. The editor cannot swap a native library it has loaded, so an
+update or a removal only backs up and replaces (or deletes) the files and offers an editor restart.
+Its version is kept in the lock, since the package has no
+`plugin.cfg` to say. On Windows a library the editor has loaded is locked: the replacement then fails,
+the old files are restored and you update after closing the editor.
 
 ## Files and settings
 

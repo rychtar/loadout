@@ -8,6 +8,14 @@ extends ConfirmationDialog
 signal entry_submitted(data: Dictionary, take_over: bool)
 ## Edit mode: the changed entry (id and folder stay, see LoadoutManager.update_registry_entry()).
 signal entry_edited(id: String, data: Dictionary)
+## A plugin of the project to copy into the plugin library first (its folder in addons/); data's local
+## source is the library copy (LoadoutManager.add_to_library()).
+signal library_entry_submitted(data: Dictionary, project_folder: String)
+
+const Package := preload("../util/package.gd")
+
+## Editor Settings: the folder where "copy to my plugin library" puts plugins from a project.
+const LIBRARY_SETTING := "loadout/library_path"
 
 const SOURCE_GITHUB := 0
 const SOURCE_LOCAL := 1
@@ -30,6 +38,11 @@ var _search_status: Label
 var _store_asset := ""
 var _existing_label: Label
 var _take_over := false
+## The plugin's folder in addons/ when the dialog was opened for one already in the project.
+var _existing_folder := ""
+## Copy that plugin into the library and register the copy (local source).
+var _copy_check: CheckBox
+var _browse_button: Button
 ## Id of the entry being edited, "" when adding.
 var _editing_id := ""
 ## Source of an edited entry that the dialog cannot show (the old Asset Library); kept unless replaced.
@@ -38,6 +51,9 @@ var _repo_edit: LineEdit
 var _auto_names := true
 var _setting_names := false
 var _path_edit: LineEdit
+## Shown for a local folder whose plugin.cfg has no version (an extension): the version of its files.
+var _local_version_row: HBoxContainer
+var _local_version_edit: LineEdit
 var _info_label: Label
 var _error_label: Label
 var _id_edit: LineEdit
@@ -97,13 +113,18 @@ func _init() -> void:
 	_results = ItemList.new()
 	_results.custom_minimum_size = Vector2(0, roundi(160 * scale))
 	_results.item_selected.connect(_on_result_selected)
+	_results.item_activated.connect(_confirm_row)
 	_store_box.add_child(_results)
 	_search_status = _wrapped(_caption("Free add-ons compatible with your Godot version."), width)
 	_store_box.add_child(_search_status)
 
 	_local_box = VBoxContainer.new()
 	box.add_child(_local_box)
-	_local_box.add_child(_caption("Local plugin folder (contains plugin.cfg)"))
+	_copy_check = CheckBox.new()
+	_copy_check.visible = false
+	_copy_check.toggled.connect(func(_on: bool) -> void: _update_from_path())
+	_local_box.add_child(_copy_check)
+	_local_box.add_child(_caption("Local plugin folder (contains plugin.cfg or a .gdextension)"))
 	var path_row := HBoxContainer.new()
 	_local_box.add_child(path_row)
 	_path_edit = LineEdit.new()
@@ -111,13 +132,22 @@ func _init() -> void:
 	_path_edit.placeholder_text = "/path/to/addons/my_plugin"
 	_path_edit.text_changed.connect(func(_text: String) -> void: _update_from_path())
 	path_row.add_child(_path_edit)
-	var browse := Button.new()
-	browse.text = "Browse…"
-	browse.pressed.connect(_on_browse_pressed)
-	path_row.add_child(browse)
+	_browse_button = Button.new()
+	_browse_button.text = "Browse…"
+	_browse_button.pressed.connect(_on_browse_pressed)
+	path_row.add_child(_browse_button)
 
 	_info_label = _wrapped(Label.new(), width)
 	_local_box.add_child(_info_label)
+	_local_version_row = HBoxContainer.new()
+	_local_version_row.visible = false
+	_local_box.add_child(_local_version_row)
+	_local_version_row.add_child(_caption("Version of these files"))
+	_local_version_edit = LineEdit.new()
+	_local_version_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_local_version_edit.placeholder_text = "1.0.0"
+	_local_version_edit.text_changed.connect(func(_text: String) -> void: _validate())
+	_local_version_row.add_child(_local_version_edit)
 	_error_label = _wrapped(Label.new(), width)
 	_error_label.add_theme_color_override("font_color", Color(0.94, 0.57, 0.54))
 	box.add_child(_error_label)
@@ -158,6 +188,10 @@ func open() -> void:
 	title = "Add a plugin to the global registry"
 	ok_button_text = "Add to registry"
 	_take_over = false
+	_existing_folder = ""
+	_copy_check.visible = false
+	_copy_check.button_pressed = false
+	_path_edit.editable = true
 	_editing_id = ""
 	_legacy_source = {}
 	_existing_label.visible = false
@@ -166,6 +200,8 @@ func open() -> void:
 	_auto_names = true
 	_repo_edit.text = ""
 	_path_edit.text = ""
+	_local_version_edit.text = ""
+	_local_version_row.visible = false
 	_query_edit.text = ""
 	_results.clear()
 	_store_asset = ""
@@ -185,6 +221,11 @@ func open_existing(info: Dictionary) -> void:
 	open()
 	title = "Add an existing plugin to the registry"
 	_take_over = true
+	_existing_folder = info["folder"]
+	_copy_check.text = "Copy addons/%s to my plugin library and use that copy" % _existing_folder
+	_copy_check.tooltip_text = "The library is %s (Editor Settings → Loadout → Library Path)." % library_dir()
+	_copy_check.visible = true
+	_copy_check.button_pressed = true
 	_auto_names = false
 	_set_names(info["folder"])
 	_folder_edit.editable = false
@@ -222,6 +263,7 @@ func open_edit(entry: LoadoutRegistry.Entry, display_name: String) -> void:
 		LoadoutRegistry.SOURCE_LOCAL:
 			_select_source(SOURCE_LOCAL)
 			_path_edit.text = entry.source["path"]
+			_local_version_edit.text = str(entry.source.get("version", ""))
 		LoadoutRegistry.SOURCE_STORE:
 			_select_source(SOURCE_STORE)
 			_store_asset = entry.source["asset"]
@@ -343,32 +385,78 @@ func _on_dir_selected(dir: String) -> void:
 ## rewrite: replace a project folder by the plugin folder inside it. Not while typing, the text
 ## would jump under the cursor; _source_data() resolves the folder either way.
 func _update_from_path(rewrite: bool = false) -> void:
+	if _copying():
+		# The library copy does not exist yet: the project's files say what it will be.
+		_path_edit.text = library_dir().path_join(_existing_folder)
+		_path_edit.editable = false
+		_browse_button.disabled = true
+		_describe_folder(ProjectSettings.globalize_path("res://addons").path_join(_existing_folder))
+		_validate()
+		return
+	_path_edit.editable = true
+	_browse_button.disabled = false
 	var path := _plugin_dir(_path_edit.text.strip_edges())
-	var cfg := ConfigFile.new()
-	if path == "" or cfg.load(path.path_join("plugin.cfg")) != OK:
-		_info_label.text = "Select a folder that contains plugin.cfg." if _path_edit.text.strip_edges() != "" else ""
+	if path == "":
+		_info_label.text = "Select a folder that contains plugin.cfg or a .gdextension." if _path_edit.text.strip_edges() != "" else ""
+		_local_version_row.visible = false
 		_validate()
 		return
 	if rewrite and path != _path_edit.text.strip_edges():
 		_path_edit.text = path
-	_info_label.text = "Found plugin %s, version %s." % [cfg.get_value("plugin", "name", "?"), cfg.get_value("plugin", "version", "?")]
+	_describe_folder(path)
 	if _auto_names:
 		_set_names(path.trim_suffix("/").get_file())
 	_validate()
 
 
-## Accepts the plugin folder itself or a project folder with exactly one plugin in addons/.
+## Says what the add-on folder holds and asks for a version when its plugin.cfg has none.
+func _describe_folder(path: String) -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(path.path_join("plugin.cfg"))
+	var plugin_name := str(cfg.get_value("plugin", "name", path.trim_suffix("/").get_file()))
+	var version := str(cfg.get_value("plugin", "version", ""))
+	# Without a version in plugin.cfg (an extension) the registry entry says which version the files are.
+	_local_version_row.visible = version == ""
+	if version == "":
+		_info_label.text = "Found %s, which has no plugin.cfg with a version (an extension). Enter the version of these files." % plugin_name
+	else:
+		_info_label.text = "Found plugin %s, version %s." % [plugin_name, version]
+
+
+func _copying() -> bool:
+	return _existing_folder != "" and _copy_check.button_pressed
+
+
+## The plugin library folder from Editor Settings (the editor's data folder when unset).
+static func library_dir() -> String:
+	var settings := EditorInterface.get_editor_settings()
+	var path := str(settings.get_setting(LIBRARY_SETTING)) if settings.has_setting(LIBRARY_SETTING) else ""
+	return path if path != "" else default_library_dir()
+
+
+static func default_library_dir() -> String:
+	return EditorInterface.get_editor_paths().get_data_dir().path_join("loadout_library")
+
+
+## Accepts the add-on folder itself (plugin.cfg or a .gdextension) or a project folder with exactly
+## one add-on in addons/.
 func _plugin_dir(path: String) -> String:
 	if path == "" or not DirAccess.dir_exists_absolute(path):
 		return ""
-	if FileAccess.file_exists(path.path_join("plugin.cfg")):
+	if Package.has_plugin_cfg(path):
 		return path
+	# A project or repository folder: its single add-on in addons/. Checked before the folder's own
+	# .gdextension search, which would find the add-ons below it too.
 	var addons := path.path_join("addons")
 	var found: PackedStringArray = []
 	for sub_dir in DirAccess.get_directories_at(addons):
-		if FileAccess.file_exists(addons.path_join(sub_dir).path_join("plugin.cfg")):
+		if Package.is_addon(addons.path_join(sub_dir)):
 			found.append(addons.path_join(sub_dir))
-	return found[0] if found.size() == 1 else ""
+	if found.size() == 1:
+		return found[0]
+	if found.is_empty() and Package.has_extension(path) and not FileAccess.file_exists(path.path_join("project.godot")):
+		return path
+	return ""
 
 
 func _validate() -> void:
@@ -379,7 +467,8 @@ func _validate() -> void:
 		SOURCE_STORE:
 			has_source = _store_asset != "" or not _legacy_source.is_empty()
 		SOURCE_LOCAL:
-			has_source = _plugin_dir(_path_edit.text.strip_edges()) != ""
+			has_source = (_copying() or _plugin_dir(_path_edit.text.strip_edges()) != "") \
+					and (not _local_version_row.visible or _local_version_edit.text.strip_edges() != "")
 	var parsed := LoadoutRegistry.parse_entry(_entry_data())
 	_error_label.text = parsed["error"] if has_source and not parsed["ok"] else ""
 	_error_label.visible = _error_label.text != ""
@@ -406,13 +495,18 @@ func _source_data() -> Dictionary:
 				return _legacy_source
 			return { "type": LoadoutRegistry.SOURCE_STORE, "asset": _store_asset }
 	var typed := _path_edit.text.strip_edges()
-	var plugin_dir := _plugin_dir(typed)
-	return { "type": LoadoutRegistry.SOURCE_LOCAL, "path": plugin_dir if plugin_dir != "" else typed }
+	var plugin_dir := typed if _copying() else _plugin_dir(typed)
+	var local := { "type": LoadoutRegistry.SOURCE_LOCAL, "path": plugin_dir if plugin_dir != "" else typed }
+	if _local_version_row.visible and _local_version_edit.text.strip_edges() != "":
+		local["version"] = _local_version_edit.text.strip_edges()
+	return local
 
 
 func _on_confirmed() -> void:
 	if _editing_id != "":
 		entry_edited.emit(_editing_id, _entry_data())
+	elif _copying() and _source_option.get_selected_id() == SOURCE_LOCAL:
+		library_entry_submitted.emit(_entry_data(), _existing_folder)
 	else:
 		entry_submitted.emit(_entry_data(), _take_over)
 
@@ -440,3 +534,9 @@ func _labeled_edit(grid: GridContainer, caption: String, value: String) -> LineE
 	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	grid.add_child(edit)
 	return edit
+
+
+## A double-click (or Enter) on a row confirms it, like OK.
+func _confirm_row(_index: int) -> void:
+	if not get_ok_button().disabled:
+		get_ok_button().pressed.emit()

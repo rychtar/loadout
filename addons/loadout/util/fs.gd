@@ -10,12 +10,23 @@ const HASH_IGNORED_EXTENSIONS: PackedStringArray = ["uid", "import"]
 const HASH_IGNORED_NAMES: PackedStringArray = [".ds_store", "thumbs.db", "desktop.ini"]
 ## Files with a NUL byte in this prefix are binary (same heuristic as git).
 const BINARY_SNIFF_BYTES := 8000
+## A folder hash is reused only when every file is older than this: file times have one-second steps,
+## so an edit in the same second could keep the time (the "racy" case git knows too).
+const HASH_CACHE_MIN_AGE_S := 2
+
+## hash_dir() results by folder: [signature of the file names, sizes and times, hash].
+static var _hash_cache: Dictionary[String, Array] = {}
 
 
 ## Recursively copies the contents of src into dst (dst is created if missing).
-## Files and folders whose name is in exclude are skipped at any depth. Symlinked sub folders are
-## skipped (they could point outside the plugin or loop); src itself may be a symlink.
+## Files and folders whose name is in exclude are skipped at any depth. A symlink that points to a
+## place inside src (a macOS framework's Versions/Current) is copied as a symlink; one that points out
+## is followed for a file and skipped for a folder (it could loop); src itself may be a symlink.
 static func copy_dir(src: String, dst: String, exclude: PackedStringArray = []) -> Error:
+	return _copy_dir(src, dst, exclude, "")
+
+
+static func _copy_dir(src: String, dst: String, exclude: PackedStringArray, relative: String) -> Error:
 	var dir := _open(src)
 	if dir == null:
 		return DirAccess.get_open_error()
@@ -25,16 +36,54 @@ static func copy_dir(src: String, dst: String, exclude: PackedStringArray = []) 
 	for file_name: String in dir.get_files():
 		if exclude.has(file_name):
 			continue
+		if dir.is_link(file_name) and _copy_link(dir, file_name, relative.path_join(file_name), dst.path_join(file_name)):
+			continue
 		err = DirAccess.copy_absolute(src.path_join(file_name), dst.path_join(file_name))
 		if err != OK:
 			return err
 	for sub_dir: String in dir.get_directories():
-		if exclude.has(sub_dir) or dir.is_link(sub_dir):
+		if exclude.has(sub_dir):
 			continue
-		err = copy_dir(src.path_join(sub_dir), dst.path_join(sub_dir), exclude)
+		if dir.is_link(sub_dir):
+			_copy_link(dir, sub_dir, relative.path_join(sub_dir), dst.path_join(sub_dir))
+			continue
+		err = _copy_dir(src.path_join(sub_dir), dst.path_join(sub_dir), exclude, relative.path_join(sub_dir))
 		if err != OK:
 			return err
 	return OK
+
+
+## Makes the symlink name of dir again at dst_path when it points inside the copied folder (relative
+## is its path there). False when it does not, or the system cannot make links (Windows without the right).
+static func _copy_link(dir: DirAccess, name: String, relative: String, dst_path: String) -> bool:
+	var target := dir.read_link(name)
+	if not link_stays_inside(relative, target):
+		return false
+	var global := ProjectSettings.globalize_path(dst_path)
+	var dst_dir := DirAccess.open(global.get_base_dir())
+	if dst_dir == null:
+		return false
+	if dst_dir.is_link(global.get_file()) and dst_dir.read_link(global.get_file()) == target:
+		return true
+	return dst_dir.create_link(target, global) == OK
+
+
+## Whether a symlink at relative (its path inside a folder) whose text is target points into that
+## folder: "A" or "Versions/Current/lib" do, "/etc", "C:/x" and "../../x" do not.
+static func link_stays_inside(relative: String, target: String) -> bool:
+	if target == "" or target.is_absolute_path() or target.contains(":") or target.contains("\\"):
+		return false
+	var parts := PackedStringArray()
+	for part in (relative.get_base_dir() + "/" + target).split("/", false):
+		if part == ".":
+			continue
+		if part == "..":
+			if parts.is_empty():
+				return false
+			parts.remove_at(parts.size() - 1)
+		else:
+			parts.append(part)
+	return not parts.is_empty()
 
 
 ## Recursively deletes path. A missing path is not an error. A symlink is only unlinked, what it
@@ -81,9 +130,47 @@ static func list_files(root: String) -> PackedStringArray:
 ## "sha256:<hex>" of the folder content, "" if the folder does not exist.
 ## Covers relative paths and file contents. Ignores editor-generated files (.uid, .import) and
 ## treats CRLF as LF in text files so a git checkout on Windows does not look like a change.
+## The result is reused while no file was added, removed, resized or touched, so a refresh of many
+## plugins does not read all their files again.
 static func hash_dir(path: String) -> String:
 	if not DirAccess.dir_exists_absolute(path):
 		return ""
+	var key := ProjectSettings.globalize_path(path).simplify_path()
+	var signature := _signature(path)
+	if signature != "" and _hash_cache.has(key) and _hash_cache[key][0] == signature:
+		return _hash_cache[key][1]
+	var folder_hash := _hash_files(path)
+	if signature != "":
+		_hash_cache[key] = [signature, folder_hash]
+	else:
+		_hash_cache.erase(key)
+	return folder_hash
+
+
+## Whether hash_dir(path) would answer from its cache (for tests).
+static func is_hash_cached(path: String) -> bool:
+	var key := ProjectSettings.globalize_path(path).simplify_path()
+	return _hash_cache.has(key) and _hash_cache[key][0] == _signature(path)
+
+
+## Names, sizes and modification times of the files hash_dir() reads; "" when a file is too new to
+## trust its time.
+static func _signature(path: String) -> String:
+	var newest_trusted := int(Time.get_unix_time_from_system()) - HASH_CACHE_MIN_AGE_S
+	var lines := PackedStringArray()
+	for relative in list_files(path):
+		if _hash_ignored(relative):
+			continue
+		var file_path := path.path_join(relative)
+		var modified := FileAccess.get_modified_time(file_path)
+		var file := FileAccess.open(file_path, FileAccess.READ)
+		if file == null or modified > newest_trusted:
+			return ""
+		lines.append("%s\n%d\n%d" % [relative, file.get_length(), modified])
+	return "\n".join(lines).sha256_text()
+
+
+static func _hash_files(path: String) -> String:
 	var context := HashingContext.new()
 	context.start(HashingContext.HASH_SHA256)
 	var hashes := file_hashes(path)
@@ -99,8 +186,7 @@ static func hash_dir(path: String) -> String:
 static func file_hashes(path: String) -> Dictionary:
 	var hashes := {}
 	for relative in list_files(path):
-		var file_name := relative.get_file()
-		if HASH_IGNORED_NAMES.has(file_name.to_lower()) or HASH_IGNORED_EXTENSIONS.has(file_name.get_extension()):
+		if _hash_ignored(relative):
 			continue
 		var content := _normalized_bytes(path.path_join(relative))
 		var content_hash := HashingContext.new()
@@ -109,6 +195,11 @@ static func file_hashes(path: String) -> Dictionary:
 			content_hash.update(content)
 		hashes[relative] = content_hash.finish().hex_encode()
 	return hashes
+
+
+static func _hash_ignored(relative: String) -> bool:
+	var file_name := relative.get_file()
+	return HASH_IGNORED_NAMES.has(file_name.to_lower()) or HASH_IGNORED_EXTENSIONS.has(file_name.get_extension())
 
 
 ## How folder `current` differs from `baseline`: { "modified": [...], "added": [...], "removed": [...] }
@@ -155,15 +246,15 @@ static func _normalized_bytes(path: String) -> PackedByteArray:
 	var bytes := FileAccess.get_file_as_bytes(path)
 	if not bytes.has(13) or bytes.slice(0, BINARY_SNIFF_BYTES).has(0):
 		return bytes
-	# Text file with CR: drop every CR that precedes LF (byte level, works for any encoding).
+	# Text file with CR: drop every CR that precedes LF (byte level, works for any encoding). The loop
+	# jumps from CR to CR and copies the runs in between, so it runs once per line, not per byte.
 	var out := PackedByteArray()
-	out.resize(bytes.size())
-	var size := 0
-	var last := bytes.size() - 1
-	for i in bytes.size():
-		if bytes[i] == 13 and i < last and bytes[i + 1] == 10:
-			continue
-		out[size] = bytes[i]
-		size += 1
-	out.resize(size)
+	var start := 0
+	var cr := bytes.find(13)
+	while cr != -1:
+		if cr + 1 < bytes.size() and bytes[cr + 1] == 10:
+			out.append_array(bytes.slice(start, cr))
+			start = cr + 1
+		cr = bytes.find(13, cr + 1)
+	out.append_array(bytes.slice(start))
 	return out

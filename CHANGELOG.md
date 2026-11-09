@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.4.0
+
+Loadout now needs **Godot 4.7** (the dock is an `EditorDock`; the Asset Store was already 4.7 only). This release brings GDExtension add-ons, a reworked dock and fixes for registries shared by several Loadout versions. GDExtensions were checked end to end with Orchestrator 2.5.0 and Terrain3D 1.0.2 → 1.1.0 from GitHub.
+
+### Added
+
+- **GDExtensions**: add-ons that ship a `.gdextension` file, with or without a `plugin.cfg` (Orchestrator, Terrain3D), can be installed, updated, restored and removed.
+  - A new one is copied and Godot loads it right away, no restart. When it also has a `plugin.cfg`, its editor plugin is enabled once the library is loaded.
+  - An update or a removal backs up the files, replaces or deletes them and offers an editor restart: the editor cannot swap a library it has loaded. On Windows a loaded library is locked, so the update fails and the old files come back.
+  - Without a `plugin.cfg` the version comes from the lock. Such add-ons already in a project are listed for **Add to registry…** too.
+- **Local GDExtension folders** as a source: the registry entry carries the version of the files (`"version"` in the local source), the Add dialog asks for it.
+- **Copy to my plugin library**: **Add to registry…** for a plugin that is already in a project can copy its folder into a library folder (Editor Settings → Loadout → Library Path) and register that copy, so every other project gets the plugin from there. A library folder with other files is never overwritten.
+- **Right-click** a plugin in the dock for all its actions, **double-click** it (or press Enter) to install or update it. A double-click also confirms a row in the version, backup and Asset Store search lists.
+- **Show in FileSystem** for an installed plugin, and links to the plugin's page and to the release notes of the version Loadout would install.
+- Godot-style release numbers: `v2.5.stable` and `v1.1.0-stable` are the releases 2.5.0 and 1.1.0, `v2.5.1.rc2` a release candidate of 2.5.1, `v2.6.dev2` a snapshot of 2.6.0 (pre-releases only with the opt-in, as before).
+
+### Changed
+
+- **The dock**
+  - It is an `EditorDock` with its own title and icon (shown where the editor shows dock icons, for example Editor → Editor Docks) and keeps its place in the layout.
+  - The header counts the plugins per state ("Up to date 3 · Update 1"); its tooltip and the check button's say when the sources last answered.
+  - The line saying what runs sits under the header and names the action ("Update · Gut…").
+  - **Remove from project…** and **Remove from registry…** are in a **Remove** menu at the end of the actions, apart from the ones that cannot lose anything.
+  - The plugin list and the detail share the height with a border to drag; the detail is as tall as its content and scrolls past 60 % of the dock.
+  - A finished action that only reports (up to date, registry saved, imported) shows an editor toast. Errors, warnings, skipped entries and **Show changes…** still open a dialog.
+- **Packages**
+  - Symlinks inside a package, such as a macOS framework's `Versions/Current`, are kept as symlinks instead of becoming text files and missing folders. A link that points out of the package, or a file written through one, refuses the package.
+  - A release zip that names the plugin folder as a whole word (`ui-1.0.zip` for `ui`, `debug-draw-3d.zip` for `debug_draw_3d`) wins over one that only contains it (`build-tools.zip`), and a plugin zip wins over a `-demo-` zip.
+- **Speed**: refreshing the dock no longer reads every file of every plugin again (a folder's hash is reused until one of its files changes), and installing several plugins refreshes the list once at the end.
+- An install waits up to two minutes for the editor's filesystem scan, counted from the scan Loadout starts, so an update in a large project is no longer rolled back after 30 seconds.
+
+### Fixed
+
+- **Shared registry**: entries this Loadout version cannot read (a source type or a version range from a newer Loadout, or a typo) are kept when it saves the registry or the lock, instead of being dropped for every project; their id and folder cannot be taken meanwhile. Whole numbers in fields it does not know are no longer written back as `5.0`. On Windows, an editor that reads the registry exactly while another one saves it reads the new content instead of an empty registry.
+- `-stable` tags (Terrain3D's `v1.1.0-stable`) are releases, not pre-releases that a range like `^1.0.0` left out. Sources cached the old way are checked again at the next refresh.
+- An install that starts while the dock is still refreshing (right after the editor starts) no longer fails with "Source type … is not supported" or "Release … is unknown".
+- The startup offer and the update check are no longer lost when an extension in the project does not load at startup (no library for this system): the editor's first scan reloads every script, which cancelled them.
+- When **Remove from project** cannot delete the folder (a file locked by another program), the files come back from the backup and the plugin is enabled again, instead of a disabled, half-deleted plugin.
+- A package whose zip declares more than 512 MB is refused before anything is unpacked, not after a huge file was unpacked into memory.
+- `tools/install_loadout --force` moves the old Loadout aside while it copies the new one and puts it back when the copy fails, instead of leaving the project without Loadout.
+- The **Install** button of a plugin with no installable version stays disabled after another action, and the dock hint ("Select a plugin in the list.") shows again after a plugin without a message was selected.
+
 ## 0.3.0
 
 ### Added

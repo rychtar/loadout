@@ -51,3 +51,19 @@ func test_fit_leaves_the_plugin_column_its_minimum() -> void:
 
 func test_fit_never_goes_below_the_column_minimum() -> void:
 	check_eq(Dock.fit_widths(200, 180, 120, MIN_COLUMN, MIN_NAME), Vector2i(MIN_COLUMN, MIN_COLUMN), "tiny dock")
+
+
+func test_status_summary_counts_in_status_order() -> void:
+	var counts := { LoadoutManager.Status.MISSING: 1, LoadoutManager.Status.OK: 3, LoadoutManager.Status.UPDATE: 2 }
+	check_eq(Dock.status_summary(counts), "Up to date 3 · Missing 1 · Update 2", "enum order, states with no plugin left out")
+	check_eq(Dock.status_summary({}), "", "nothing to count")
+
+
+func test_time_ago() -> void:
+	var now := 1_800_000_000
+	check_eq(Dock.time_ago(now - 30, now), "just now", "seconds")
+	check_eq(Dock.time_ago(now + 500, now), "just now", "a time in the future (wrong clock)")
+	check_eq(Dock.time_ago(now - 5 * 60, now), "5 min ago", "minutes")
+	check_eq(Dock.time_ago(now - 3 * 3600, now), "3 h ago", "hours")
+	check_eq(Dock.time_ago(now - 47 * 3600, now), "47 h ago", "up to two days in hours")
+	check_eq(Dock.time_ago(now - 5 * 86400, now), "5 days ago", "days")

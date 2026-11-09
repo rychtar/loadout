@@ -171,6 +171,7 @@ func test_only_https() -> void:
 func test_describe_and_cache_key() -> void:
 	_setup()
 	check_eq(source.describe(), "GitHub · owner/fake-a", "describe")
+	check_eq(source.page_url(), "https://github.com/owner/fake-a", "repository page")
 	check_eq(source.cache_key(), "github:owner/fake-a#fake_a", "cache key includes the plugin folder")
 	check(source.is_remote(), "remote")
 
@@ -219,3 +220,71 @@ func test_info_without_description_or_license() -> void:
 	http.respond_json("https://api.github.com/repos/owner/fake-a", { "description": null, "license": { "spdx_id": "NOASSERTION" } })
 	var info: Dictionary = await source.get_info()
 	check(info["ok"] and info["summary"] == "" and info["license"] == "", "empty, not 'null' or NOASSERTION")
+
+
+func test_dash_stable_tags_are_releases() -> void:
+	_setup()
+	http.respond_json(RELEASES_URL, [_release("v1.1.0-stable"), _release("v1.1.0-rc1", { "prerelease": true }), _release("v1.0.2-stable")])
+	source.releases.assign((await _list())["releases"])
+	check_eq(source.releases[0]["version"], "1.1.0", "the version without -stable")
+	check(not source.releases[0]["prerelease"], "not a prerelease")
+	check_eq((await source.get_latest_version("^1.0.0"))["version"], "1.1.0", "the newest release in ^1.0.0")
+
+
+func test_godot_style_tags() -> void:
+	_setup()
+	http.respond_json(RELEASES_URL, [
+		_release("v2.5.stable"), _release("v2.5.1.rc2", { "prerelease": true }), _release("v2.6.dev2", { "prerelease": true }),
+		_release("v2.4.4.stable"), _release("v2.4.final"),
+	])
+	var result := await _list()
+	var versions: PackedStringArray = []
+	for release: Dictionary in result["releases"]:
+		versions.append(release["version"])
+	check_eq(versions, PackedStringArray(["2.5.0", "2.5.1-rc.2", "2.6.0-dev.2", "2.4.4"]), "Godot-style tags, an unknown stage is skipped")
+	source.releases.assign(result["releases"])
+	var latest: Dictionary = await source.get_latest_version("^2.0.0")
+	check_eq(latest["version"], "2.5.0", "the stable release is the latest, not the candidate")
+	var with_candidates: Dictionary = await source.get_latest_version("^2.0.0", true)
+	check_eq(with_candidates["version"], "2.6.0-dev.2", "snapshots with the opt-in")
+
+
+func test_asset_named_after_the_whole_folder_wins() -> void:
+	http = FakeHttp.new()
+	source = GithubSource.new("owner/kit", "ui", http)
+	http.respond_json("https://api.github.com/repos/owner/kit/releases?per_page=50", [_release("v1.0.0", { "assets": [
+		{ "name": "build-tools.zip", "browser_download_url": "https://example.com/build.zip" },
+		{ "name": "ui-1.0.0.zip", "browser_download_url": "https://example.com/ui.zip" },
+	] })])
+	var result := await _list()
+	check_eq(result["releases"][0]["download_url"], "https://example.com/ui.zip", "ui-1.0.0, not build-tools")
+
+
+func test_underscore_and_dash_name_the_same_folder() -> void:
+	http = FakeHttp.new()
+	source = GithubSource.new("owner/dd", "debug_draw_3d", http)
+	http.respond_json("https://api.github.com/repos/owner/dd/releases?per_page=50", [_release("v1.0.0", { "assets": [
+		{ "name": "debug-draw-3d_1.0.0.zip", "browser_download_url": "https://example.com/addon.zip" },
+		{ "name": "symbols.zip", "browser_download_url": "https://example.com/symbols.zip" },
+	] })])
+	var result := await _list()
+	check_eq(result["releases"][0]["download_url"], "https://example.com/addon.zip", "debug-draw-3d is debug_draw_3d")
+
+
+func test_demo_asset_is_not_the_plugin() -> void:
+	_setup()
+	http.respond_json(RELEASES_URL, [_release("v1.1.0", { "assets": [
+		{ "name": "godot-fake_a-demo-v1.1.0.zip", "browser_download_url": "https://example.com/demo.zip" },
+		{ "name": "godot-fake_a-v1.1.0-plugin.zip", "browser_download_url": "https://example.com/plugin.zip" },
+	] })])
+	var result := await _list()
+	check_eq(result["releases"][0]["download_url"], "https://example.com/plugin.zip", "a demo project is not the addon")
+
+
+func test_only_a_demo_asset_is_still_used() -> void:
+	_setup()
+	http.respond_json(RELEASES_URL, [_release("v1.1.0", { "assets": [
+		{ "name": "fake_a-demo.zip", "browser_download_url": "https://example.com/demo.zip" },
+	] })])
+	var result := await _list()
+	check_eq(result["releases"][0]["download_url"], "https://example.com/demo.zip", "better than the source zip when it is the only asset named after the plugin")

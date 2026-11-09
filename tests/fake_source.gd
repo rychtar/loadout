@@ -11,6 +11,8 @@ var etag := ""
 var last_etag := ""
 var not_modified := false
 var fail_list := ""
+## Frames list_releases() waits before it answers, like a request in flight.
+var list_delay_frames := 0
 var notes := {}
 ## Folder name the "package" uses, reported by fetch() like the remote sources do.
 var package_folder := ""
@@ -35,6 +37,8 @@ func cache_key() -> String:
 func list_releases(previous_etag: String = "") -> Dictionary:
 	list_calls += 1
 	last_etag = previous_etag
+	for i in list_delay_frames:
+		await (Engine.get_main_loop() as SceneTree).process_frame
 	if fail_list != "":
 		return { "ok": false, "error": fail_list, "not_modified": false, "etag": "", "releases": [] }
 	if not_modified:

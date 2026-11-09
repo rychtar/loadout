@@ -103,6 +103,62 @@ func test_install_missing_writes_lock() -> void:
 	check(manager.missing_ids().is_empty(), "nothing missing")
 
 
+func test_an_install_during_a_refresh_keeps_its_source() -> void:
+	_setup("refresh_race", [_local("slow", "1.0.0", { "folder": "slow" }), _local("fake_a", "1.0.0")])
+	var slow := _fake("slow", ["1.0.0"])
+	_fake("fake_a", ["1.0.0"])
+	await manager.refresh()
+	# The startup sync's refresh is still asking the first source when the user installs the second plugin.
+	slow.list_delay_frames = 3
+	manager.refresh()
+	var result: Dictionary = await manager.install("fake_a")
+	check(result["ok"], "installed although a refresh runs: %s" % result["error"])
+	for i in 10:
+		await (Engine.get_main_loop() as SceneTree).process_frame
+	check_eq(_status("fake_a"), Manager.Status.OK, "the states are right once both are done")
+	check(manager.get_source("fake_a") != null, "the plugin keeps a source")
+
+
+func test_add_a_project_plugin_to_the_library() -> void:
+	_setup("library", [])
+	Fs.copy_dir(FIXTURES.path_join("1.0.0"), addons.path_join("fake_a"))
+	var library := root.path_join("library/fake_a")
+	var data := { "id": "fake_a", "folder": "fake_a", "source": { "type": "local", "path": ProjectSettings.globalize_path(library) } }
+	await manager.refresh()
+	check_eq(await manager.add_to_library(data, "fake_a"), "", "added")
+	check_eq(Fs.hash_dir(library), Fs.hash_dir(FIXTURES.path_join("1.0.0")), "the files are in the library")
+	check_eq(Registry.load_file(_registry_path())["registry"].get_entry("fake_a").source["path"], ProjectSettings.globalize_path(library), "registered from there")
+	check(_saved_lock().get_entry("fake_a") != null, "the project's files are taken over")
+	check_eq(_status("fake_a"), Manager.Status.OK, "up to date with the library copy")
+	check(editor.calls.is_empty(), "nothing toggled")
+
+
+func test_library_copy_is_never_overwritten() -> void:
+	_setup("library_exists", [_local("other", "1.0.0", { "folder": "fake_a" })])
+	Fs.copy_dir(FIXTURES.path_join("1.0.0"), addons.path_join("fake_b"))
+	var library := root.path_join("library/fake_b")
+	Fs.copy_dir(FIXTURES.path_join("1.1.0"), library)
+	var data := { "id": "fake_b", "folder": "fake_b", "source": { "type": "local", "path": ProjectSettings.globalize_path(library) } }
+	check(await manager.add_to_library(data, "fake_b") != "", "other files in the library folder are refused")
+	check_eq(Fs.hash_dir(library), Fs.hash_dir(FIXTURES.path_join("1.1.0")), "and left alone")
+	var taken := { "id": "other", "folder": "fake_b", "source": { "type": "local", "path": ProjectSettings.globalize_path(root.path_join("library/new")) } }
+	check(await manager.add_to_library(taken, "fake_b") != "", "an id already in the registry is refused")
+	check(not DirAccess.dir_exists_absolute(root.path_join("library/new")), "the copy made for it is removed again")
+
+
+func test_a_batch_refreshes_once() -> void:
+	_setup("batch_refresh", [_local("fake_a", "1.0.0"), _local("fake_b", "1.0.0", { "folder": "fake_b" })])
+	_fake("fake_b", ["1.0.0"])
+	await manager.refresh()
+	var refreshes: Array[int] = [0]
+	manager.states_changed.connect(func() -> void: refreshes[0] += 1)
+	var summary: Dictionary = await manager.install_missing()
+	check_eq(summary["installed"], PackedStringArray(["fake_a", "fake_b"]), "both installed: %s" % summary["failed"])
+	check_eq(refreshes[0], 1, "one refresh for the whole batch")
+	check_eq([_status("fake_a"), _status("fake_b")], [Manager.Status.OK, Manager.Status.OK], "states are current")
+	check_eq(_saved_lock().plugins.size(), 2, "both locked")
+
+
 func test_auto_install_false_is_not_offered() -> void:
 	_setup("manual", [_local("fake_a", "1.0.0", { "auto_install": false })])
 	await manager.refresh()
@@ -760,3 +816,214 @@ func test_edit_rejects_invalid_data() -> void:
 	check(await manager.update_registry_entry("fake_a", data) != "", "invalid range refused")
 	check_eq(Registry.load_file(_registry_path())["registry"].get_entry("fake_a").version_range, "*", "registry untouched")
 	check(await manager.update_registry_entry("missing", data) != "", "unknown plugin")
+
+
+# --- native add-ons: GDExtension packages without a plugin.cfg ---
+
+const EXT_FIXTURES := "res://tests/fixtures/addons/fake_ext"
+
+
+func _ext(id: String = "fake_ext", extra: Dictionary = {}) -> Dictionary:
+	var data := { "id": id, "folder": id, "source": { "type": "store", "asset": "cratercrash-studios/orchestrator" } }
+	data.merge(extra, true)
+	return data
+
+
+func _fake_ext(id: String, versions: Array[String]) -> FakeSource:
+	var map: Dictionary[String, String] = {}
+	for version in versions:
+		map[version] = EXT_FIXTURES.path_join(version)
+	var source := FakeSource.new(map)
+	fake_sources[id] = source
+	return source
+
+
+func test_local_extension_with_a_registry_version() -> void:
+	var path := ProjectSettings.globalize_path(EXT_FIXTURES.path_join("1.0.0"))
+	_setup("native_local", [{ "id": "fake_ext", "folder": "fake_ext", "source": { "type": "local", "path": path, "version": "1.0.0" } }])
+	await manager.refresh()
+	check_eq(_status("fake_ext"), Manager.Status.MISSING, "offered: %s" % manager.get_state("fake_ext").message)
+	var result: Dictionary = await manager.install("fake_ext")
+	check(result["ok"] and result["native"], "installed as native code: %s" % result["error"])
+	check_eq(_saved_lock().get_entry("fake_ext").version, "1.0.0", "the registry version in the lock")
+	check_eq(_status("fake_ext"), Manager.Status.OK, "up to date")
+
+
+func test_native_install_and_update() -> void:
+	_setup("native", [_ext("fake_ext", { "range": "^1.0.0" })])
+	var source := _fake_ext("fake_ext", ["1.0.0"])
+	var restarts: Array[int] = [0]
+	var scans: Array[int] = [0]
+	manager.restart_recommended.connect(func() -> void: restarts[0] += 1)
+	manager.scan_requested.connect(func() -> void: scans[0] += 1)
+	await manager.refresh()
+	check_eq(_status("fake_ext"), Manager.Status.MISSING, "missing")
+	var summary: Dictionary = await manager.install_missing()
+	check_eq(summary["installed"], PackedStringArray(["fake_ext"]), "installed: %s" % summary["failed"])
+	check(not summary["restart_recommended"], "a new extension needs no restart")
+	check_eq([restarts[0], scans[0]], [0, 1], "a scan is requested, no restart")
+	check_eq(_status("fake_ext"), Manager.Status.OK, "ok")
+	var entry := _saved_lock().get_entry("fake_ext")
+	check(entry != null and entry.version == "1.0.0" and entry.folder_hash != "", "version and hash in the lock")
+	check_eq(manager.get_state("fake_ext").installed_version, "1.0.0", "the version comes from the lock")
+	source.versions["1.1.0"] = EXT_FIXTURES.path_join("1.1.0")
+	await manager.refresh()
+	check_eq(_status("fake_ext"), Manager.Status.UPDATE, "update found for an add-on with no plugin.cfg")
+	var result: Dictionary = await manager.install("fake_ext")
+	check(result["ok"], "updated: %s" % result["error"])
+	check_eq([restarts[0], scans[0]], [1, 1], "the update asks for a restart and for no scan")
+	check_eq(_status("fake_ext"), Manager.Status.OK, "ok after update")
+	check_eq(_saved_lock().get_entry("fake_ext").version, "1.1.0", "lock updated")
+	check(not editor.calls.has("enable fake_ext") and not editor.calls.has("disable fake_ext"), "never toggled")
+
+
+func test_native_modified_is_reported() -> void:
+	_setup("native_modified", [_ext()])
+	_fake_ext("fake_ext", ["1.0.0"])
+	await manager.refresh()
+	await manager.install_missing()
+	write_text(addons.path_join("fake_ext/data/default.tres"), "edited")
+	await manager.refresh()
+	check_eq(_status("fake_ext"), Manager.Status.MODIFIED, "edits found by the folder hash")
+
+
+func test_lists_extensions_without_plugin_cfg_in_the_project() -> void:
+	_setup("native_unregistered", [])
+	Fs.copy_dir(EXT_FIXTURES.path_join("1.0.0"), addons.path_join("some_ext"))
+	DirAccess.make_dir_recursive_absolute(addons.path_join("empty_folder"))
+	await manager.refresh()
+	check_eq(_unregistered_folders(), PackedStringArray(["some_ext"]), "an extension is an add-on too, an empty folder is not")
+	var info: Dictionary = manager.unregistered[0]
+	check_eq([info["name"], info["version"]], ["some_ext", ""], "the folder name stands in for the name, no version known")
+
+
+func test_take_over_an_extension_records_the_files() -> void:
+	_setup("native_take_over", [])
+	Fs.copy_dir(EXT_FIXTURES.path_join("1.0.0"), addons.path_join("fake_ext"))
+	_fake_ext("fake_ext", ["1.0.0", "1.1.0"])
+	await manager.refresh()
+	check_eq(await manager.add_registry_entry(_ext(), true), "", "added")
+	var entry := _saved_lock().get_entry("fake_ext")
+	check(entry != null and entry.folder_hash == Fs.hash_dir(addons.path_join("fake_ext")), "current files locked")
+	check_eq(_status("fake_ext"), Manager.Status.UPDATE, "the version is unknown, so the newest release is offered")
+	check(editor.calls.is_empty(), "nothing toggled")
+
+
+func test_restoring_a_native_backup() -> void:
+	_setup("native_restore", [_ext("fake_ext", { "range": "^1.0.0" })])
+	_fake_ext("fake_ext", ["1.0.0", "1.1.0"])
+	await manager.refresh()
+	await manager.install("fake_ext", false, "1.0.0")
+	await manager.install("fake_ext", true, "1.1.0")
+	var backups: Array[Dictionary] = manager.available_backups("fake_ext")
+	check(not backups.is_empty(), "the update left a backup")
+	var result: Dictionary = await manager.restore_backup("fake_ext", backups[0]["path"], true)
+	check(result["ok"], "restored: %s" % result["error"])
+	check_eq(Fs.hash_dir(addons.path_join("fake_ext")), Fs.hash_dir(EXT_FIXTURES.path_join("1.0.0")), "old files back")
+	check_eq(_saved_lock().get_entry("fake_ext").version, "1.0.0", "the backup folder name is the version")
+
+
+func test_removing_a_native_addon_asks_for_a_restart() -> void:
+	_setup("native_remove", [_ext()])
+	_fake_ext("fake_ext", ["1.0.0"])
+	var restarts: Array[int] = [0]
+	await manager.refresh()
+	await manager.install_missing()
+	manager.restart_recommended.connect(func() -> void: restarts[0] += 1)
+	var result: Dictionary = await manager.uninstall("fake_ext")
+	check(result["ok"], "removed: %s" % result["error"])
+	check_eq(restarts[0], 1, "the loaded library stays until a restart")
+	check(not DirAccess.dir_exists_absolute(addons.path_join("fake_ext")), "folder gone")
+	check(_saved_lock().ignored.has("fake_ext"), "not brought back by the next sync")
+
+
+## fake_ext packages that also have a plugin.cfg (an EditorPlugin on top of the extension).
+func _fake_ext_with_plugin(id: String, versions: Array[String]) -> FakeSource:
+	var packages := temp_dir("manager_%s_packages" % id)
+	var map: Dictionary[String, String] = {}
+	for version in versions:
+		var dir := packages.path_join(version)
+		Fs.copy_dir(EXT_FIXTURES.path_join(version), dir)
+		write_text(dir.path_join("plugin.cfg"), "[plugin]\nname=\"Fake Ext\"\nversion=\"%s\"\nscript=\"plugin.gd\"\n" % version)
+		write_text(dir.path_join("plugin.gd"), "@tool\nextends EditorPlugin\n")
+		map[version] = dir
+	var source := FakeSource.new(map)
+	fake_sources[id] = source
+	return source
+
+
+func test_native_plugin_is_enabled_after_the_scan() -> void:
+	_setup("native_plugin", [_ext()])
+	_fake_ext_with_plugin("fake_ext", ["1.0.0"])
+	await manager.refresh()
+	var summary: Dictionary = await manager.install_missing()
+	check_eq(summary["installed"], PackedStringArray(["fake_ext"]), "installed: %s" % summary["failed"])
+	check(not editor.calls.has("enable fake_ext"), "not enabled before the scan loads the library")
+	check_eq(await manager.enable_scanned_plugins(), PackedStringArray(), "no problems")
+	check(editor.is_plugin_enabled("fake_ext"), "enabled after the scan")
+	check(editor.calls.has("save"), "project.godot saved")
+	await manager.enable_scanned_plugins()
+	check_eq(editor.calls.count("enable fake_ext"), 1, "enabled once")
+
+
+func test_native_plugin_put_back_while_its_library_is_loaded_is_enabled_on_restart() -> void:
+	_setup("native_plugin_back", [_ext()])
+	_fake_ext_with_plugin("fake_ext", ["1.0.0"])
+	await manager.refresh()
+	await manager.install_missing()
+	await manager.enable_scanned_plugins()
+	check((await manager.uninstall("fake_ext"))["ok"], "removed")
+	var result: Dictionary = await manager.install("fake_ext")
+	check(result["ok"] and result["restart_recommended"], "the old library is still loaded: %s" % result["error"])
+	check(editor.calls.has("enable_on_restart fake_ext"), "the plugin starts with the next editor start")
+	check_eq(await manager.enable_scanned_plugins(), PackedStringArray(), "nothing waits for a scan")
+	check_eq(editor.calls.count("enable fake_ext"), 1, "not enabled again now")
+
+
+func test_one_scan_after_a_batch_of_native_installs() -> void:
+	_setup("native_batch", [_ext("fake_ext"), _ext("fake_ext2")])
+	_fake_ext("fake_ext", ["1.0.0"])
+	_fake_ext("fake_ext2", ["1.0.0"])
+	var scans: Array[int] = [0]
+	var installed_at_scan: Array[int] = [-1]
+	var folder := addons
+	manager.scan_requested.connect(func() -> void:
+		scans[0] += 1
+		installed_at_scan[0] = DirAccess.get_directories_at(folder).size())
+	await manager.refresh()
+	var summary: Dictionary = await manager.install_missing()
+	check_eq(summary["installed"].size(), 2, "both installed: %s" % summary["failed"])
+	check_eq(scans[0], 1, "one scan for the whole batch: a scan in between would cancel the rest")
+	check_eq(installed_at_scan[0], 2, "asked after the last install")
+
+
+func test_restoring_a_native_addon_removed_in_this_session_needs_a_restart() -> void:
+	_setup("native_restore_removed", [_ext()])
+	_fake_ext("fake_ext", ["1.0.0"])
+	await manager.refresh()
+	await manager.install_missing()
+	await manager.uninstall("fake_ext")
+	var restarts: Array[int] = [0]
+	var scans: Array[int] = [0]
+	manager.restart_recommended.connect(func() -> void: restarts[0] += 1)
+	manager.scan_requested.connect(func() -> void: scans[0] += 1)
+	var backups: Array[Dictionary] = manager.available_backups("fake_ext")
+	var result: Dictionary = await manager.restore_backup("fake_ext", backups[0]["path"])
+	check(result["ok"], "restored: %s" % result["error"])
+	check_eq([restarts[0], scans[0]], [1, 0], "the old library is still loaded, so a restart, not a scan")
+
+
+func test_reinstalling_a_removed_native_addon_needs_a_restart_not_a_scan() -> void:
+	# The removed add-on's library is still loaded, so a scan would find nothing to load.
+	_setup("native_reinstall", [_ext()])
+	_fake_ext("fake_ext", ["1.0.0", "1.1.0"])
+	await manager.refresh()
+	await manager.install("fake_ext", false, "1.0.0")
+	await manager.uninstall("fake_ext")
+	var restarts: Array[int] = [0]
+	var scans: Array[int] = [0]
+	manager.restart_recommended.connect(func() -> void: restarts[0] += 1)
+	manager.scan_requested.connect(func() -> void: scans[0] += 1)
+	var result: Dictionary = await manager.install("fake_ext", false, "1.1.0")
+	check(result["ok"], "installed again: %s" % result["error"])
+	check_eq([restarts[0], scans[0]], [1, 0], "restart, no scan")

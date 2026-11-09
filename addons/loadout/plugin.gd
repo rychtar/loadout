@@ -13,15 +13,30 @@ const TOKEN_SETTING := "loadout/github_token"
 ## Development only: use another registry file instead of the one in the editor config dir
 ## (the update cache then lives next to it).
 const REGISTRY_ARG_PREFIX := "--loadout-registry="
+const REGISTRY_ENV := "LOADOUT_REGISTRY"
 ## Development only: godot -e --path . -- --loadout-smoke=<mode> runs tests/editor/installer_smoke.gd
 ## and quits the editor (exit code 0 = passed). Ignored when the tests folder is not present.
 const SMOKE_ARG_PREFIX := "--loadout-smoke="
 const SMOKE_SCRIPT := "res://tests/editor/installer_smoke.gd"
 ## Smoke modes that drive the installer themselves and must not see the startup sync.
 const SMOKE_INSTALLER_MODES: PackedStringArray = ["install", "update", "verify", "remove"]
+## Dock tab icon: three plugin slots, the top one being loaded. FONT and ACCENT become the editor
+## theme's colors; it is drawn at the editor scale, so it stays sharp.
+const DOCK_ICON_SVG := """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+<rect x="1.5" y="1.5" width="13" height="3.5" rx="1" fill="#ACCENT"/>
+<rect x="1.5" y="6.25" width="13" height="3.5" rx="1" fill="#FONT" fill-opacity=".8"/>
+<rect x="1.5" y="11" width="13" height="3.5" rx="1" fill="#FONT" fill-opacity=".8"/>
+</svg>"""
+
+## How often the startup waits check whether the editor's first scan is over.
+const STARTUP_POLL_S := 0.5
 
 var _manager: LoadoutManager
+## The dock's content; _editor_dock is the editor's dock around it (title, icon, place).
 var _dock: Control
+var _editor_dock: EditorDock
+## Polls in a row that found the filesystem idle (the startup sync waits for two).
+var _idle_polls := 0
 
 
 func _enter_tree() -> void:
@@ -41,11 +56,19 @@ func _enter_tree() -> void:
 	_dock.manager = _manager
 	_dock.store_search = func(query: String) -> Dictionary:
 		return await LoadoutStoreSource.search(http, query, godot_version)
-	add_control_to_dock(DOCK_SLOT_RIGHT_UL, _dock)
+	_editor_dock = EditorDock.new()
+	_editor_dock.name = "Loadout"
+	_editor_dock.title = "Loadout"
+	# The same key the old add_control_to_dock() layout used (the control's name), so the dock stays put.
+	_editor_dock.layout_key = "Loadout"
+	_editor_dock.default_slot = EditorDock.DOCK_SLOT_RIGHT_UL
+	_editor_dock.dock_icon = _dock_icon()
+	_editor_dock.add_child(_dock)
+	add_dock(_editor_dock)
 
 	var smoke_mode := _cmdline_value(SMOKE_ARG_PREFIX)
 	if smoke_mode == "" or not SMOKE_INSTALLER_MODES.has(smoke_mode):
-		_startup_sync.call_deferred()
+		_wait_for_first_scan.call_deferred()
 	if smoke_mode != "":
 		_run_smoke.call_deferred(smoke_mode)
 
@@ -54,10 +77,22 @@ func _exit_tree() -> void:
 	var filesystem := EditorInterface.get_resource_filesystem()
 	if filesystem.filesystem_changed.is_connected(_on_filesystem_changed):
 		filesystem.filesystem_changed.disconnect(_on_filesystem_changed)
-	remove_control_from_docks(_dock)
-	_dock.queue_free()
+	remove_dock(_editor_dock)
+	_editor_dock.queue_free()
+	_editor_dock = null
 	_dock = null
 	_manager = null
+
+
+func _dock_icon() -> Texture2D:
+	var theme := EditorInterface.get_editor_theme()
+	var font := theme.get_color("font_color", "Editor") if theme.has_color("font_color", "Editor") else Color("e0e0e0")
+	var accent := theme.get_color("accent_color", "Editor") if theme.has_color("accent_color", "Editor") else Color("70bafa")
+	var image := Image.new()
+	var svg := DOCK_ICON_SVG.replace("#FONT", "#" + font.to_html(false)).replace("#ACCENT", "#" + accent.to_html(false))
+	if image.load_svg_from_string(svg, EditorInterface.get_editor_scale()) != OK:
+		return null
+	return ImageTexture.create_from_image(image)
 
 
 func get_manager() -> LoadoutManager:
@@ -68,12 +103,24 @@ func get_dock() -> Control:
 	return _dock
 
 
+## Starts the startup sync once the editor's first scan is over. A timer polls instead of a coroutine
+## waiting: when an extension did not load at startup, the first scan tries it again and reloads every
+## script, which would cancel the wait (and the sync with it). Two idle polls in a row let that reload
+## pass first.
+func _wait_for_first_scan() -> void:
+	if _manager == null or not is_inside_tree():
+		return
+	_idle_polls = 0 if EditorInterface.get_resource_filesystem().is_scanning() else _idle_polls + 1
+	if _idle_polls < 2:
+		get_tree().create_timer(STARTUP_POLL_S).timeout.connect(_wait_for_first_scan, CONNECT_ONE_SHOT)
+		return
+	_startup_sync()
+
+
 ## Loads registry and lock once the editor finished scanning, offers missing plugins and
 ## announces available updates (remote sources are asked at most once a day).
 func _startup_sync() -> void:
 	var filesystem := EditorInterface.get_resource_filesystem()
-	while filesystem.is_scanning():
-		await get_tree().process_frame
 	if _manager == null:
 		return
 	await _manager.refresh()
@@ -119,6 +166,12 @@ func _register_settings() -> void:
 		settings.set_setting(Dock.SHOW_STARTERS_SETTING, true)
 	settings.set_initial_value(Dock.SHOW_STARTERS_SETTING, true, false)
 	settings.add_property_info({ "name": Dock.SHOW_STARTERS_SETTING, "type": TYPE_BOOL })
+	# Where "Add to registry…" copies a project's plugin for "copy to my plugin library".
+	var library_setting: String = Dock.RegistryDialog.LIBRARY_SETTING
+	if not settings.has_setting(library_setting):
+		settings.set_setting(library_setting, Dock.RegistryDialog.default_library_dir())
+	settings.set_initial_value(library_setting, Dock.RegistryDialog.default_library_dir(), false)
+	settings.add_property_info({ "name": library_setting, "type": TYPE_STRING, "hint": PROPERTY_HINT_GLOBAL_DIR })
 	# The starters already offered; clear it to be offered the starter pack again.
 	if not settings.has_setting(Dock.STARTERS_SEEN_SETTING):
 		settings.set_setting(Dock.STARTERS_SEEN_SETTING, PackedStringArray())
@@ -126,8 +179,12 @@ func _register_settings() -> void:
 	settings.add_property_info({ "name": Dock.STARTERS_SEEN_SETTING, "type": TYPE_PACKED_STRING_ARRAY })
 
 
+## Development only: LOADOUT_REGISTRY=<file> does the same as --loadout-registry, and unlike that
+## argument it survives an editor restart (Godot relaunches the editor without the arguments after "--").
 func _registry_path() -> String:
 	var override := _cmdline_value(REGISTRY_ARG_PREFIX)
+	if override == "":
+		override = OS.get_environment(REGISTRY_ENV)
 	if override != "":
 		return override
 	return EditorInterface.get_editor_paths().get_config_dir().path_join(REGISTRY_FILE)
